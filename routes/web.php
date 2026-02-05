@@ -1,51 +1,135 @@
 <?php
 
-use App\Http\Controllers\ProfileController;
-use App\Http\Controllers\MenuItemController;
-use App\Http\Controllers\Admin\UserController;
-use App\Http\Controllers\Admin\FoodController;
+use App\Http\Controllers\Admin\DashboardController;
+use App\Http\Controllers\Admin\FoodCategoryController;
+use App\Http\Controllers\Admin\FoodItemController;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
+use Inertia\Inertia;
 
+// Public routes - WITH DEBUG LOGGING
 Route::get('/', function () {
-    return view('welcome');
+    // DEBUG: Log access
+    \Log::info('=== HOME PAGE ACCESSED ===', [
+        'is_authenticated' => Auth::check(),
+        'user_role' => Auth::check() ? Auth::user()->role : 'guest',
+        'session_id' => session()->getId(),
+        'url' => request()->fullUrl(),
+    ]);
+
+    // Check if user is already authenticated
+    if (Auth::check()) {
+        $user = Auth::user();
+
+        \Log::info('User is logged in, redirecting based on role', [
+            'user_id' => $user->id,
+            'user_name' => $user->name,
+            'user_role' => $user->role,
+        ]);
+
+        // FORCE ADMIN TO ADMIN DASHBOARD
+        if ($user->role === 'admin') {
+            \Log::info('FORCE REDIRECT: Admin user to /admin/dashboard');
+            return redirect('/admin/dashboard');
+        }
+
+        // Redirect based on user role
+        $roleRedirects = [
+            'admin' => '/admin/dashboard',
+            'resto_admin' => '/cashier',
+            'resto' => '/cashier',
+            'kitchen' => '/kitchen',
+            'customer' => '/menu',
+        ];
+
+        $redirectTo = $roleRedirects[$user->role] ?? '/admin/dashboard';
+
+        \Log::info('Redirecting user to: ' . $redirectTo);
+
+        return redirect($redirectTo);
+    }
+
+    \Log::info('Showing welcome page to guest');
+
+    // Only show welcome page to guests (not logged in users)
+    return Inertia::render('Welcome', [
+        'canLogin' => Route::has('login'),
+        'canRegister' => Route::has('register'),
+    ]);
 });
 
-Route::get('/dashboard', function () {
-    return view('dashboard');
-})->middleware(['auth', 'verified'])->name('dashboard');
+// Auth routes (handled by Breeze)
+require __DIR__.'/auth.php';
 
-Route::middleware('auth')->group(function () {
-    Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
-    Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
-    Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');
+// Admin routes
+Route::middleware(['auth', 'verified', 'role:admin'])->prefix('admin')->name('admin.')->group(function () {
+    Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
+
+    // ==================== FOODS MANAGEMENT ====================
+    // Main foods page (tabs interface like PHP version)
+    Route::get('/foods', [FoodCategoryController::class, 'index'])->name('foods.index');
     
-    // Menu Items
-    Route::get('/menu', [MenuItemController::class, 'index'])->name('menu.index');
-    Route::get('/menu/create', [MenuItemController::class, 'create'])->name('menu.create');
-    Route::post('/menu', [MenuItemController::class, 'store'])->name('menu.store');
-    Route::get('/menu/{menuItem}/edit', [MenuItemController::class, 'edit'])->name('menu.edit');
-    Route::put('/menu/{menuItem}', [MenuItemController::class, 'update'])->name('menu.update');
-    Route::delete('/menu/{menuItem}', [MenuItemController::class, 'destroy'])->name('menu.destroy');
-    
-    // Admin Routes
-    Route::prefix('admin')->name('admin.')->group(function () {
-        // Users
-        Route::get('/users', [UserController::class, 'index'])->name('users.index');
-        Route::get('/users/create', [UserController::class, 'create'])->name('users.create');
-        Route::post('/users', [UserController::class, 'store'])->name('users.store');
-        Route::get('/users/{user}/edit', [UserController::class, 'edit'])->name('users.edit');
-        Route::put('/users/{user}', [UserController::class, 'update'])->name('users.update');
-        Route::delete('/users/{user}', [UserController::class, 'destroy'])->name('users.destroy');
-        
-        // Foods (Menu Items with categories)
-        Route::get('/foods', [FoodController::class, 'index'])->name('foods.index');
-        Route::post('/foods/category', [FoodController::class, 'storeCategory'])->name('foods.category.store');
-        Route::put('/foods/category/{category}', [FoodController::class, 'updateCategory'])->name('foods.category.update');
-        Route::delete('/foods/category/{category}', [FoodController::class, 'destroyCategory'])->name('foods.category.destroy');
-        Route::post('/foods/item', [FoodController::class, 'storeItem'])->name('foods.item.store');
-        Route::put('/foods/item/{item}', [FoodController::class, 'updateItem'])->name('foods.item.update');
-        Route::delete('/foods/item/{item}', [FoodController::class, 'destroyItem'])->name('foods.item.destroy');
+    // Food Categories API Routes
+    Route::get('/food-categories', [FoodCategoryController::class, 'index'])->name('food-categories.index'); // Keep for compatibility
+    Route::post('/food-categories', [FoodCategoryController::class, 'store'])->name('food-categories.store');
+    Route::put('/food-categories/{category}', [FoodCategoryController::class, 'update'])->name('food-categories.update');
+    Route::delete('/food-categories/{category}', [FoodCategoryController::class, 'destroy'])->name('food-categories.destroy');
+    Route::post('/food-categories/{category}/toggle-status', [FoodCategoryController::class, 'toggleStatus'])->name('food-categories.toggle-status');
+    Route::post('/food-categories/update-order', [FoodCategoryController::class, 'updateOrder'])->name('food-categories.update-order');
+
+    // Food Items API Routes
+    Route::get('/food-items', [FoodItemController::class, 'index'])->name('food-items.index'); // Keep for compatibility
+    Route::post('/food-items', [FoodItemController::class, 'store'])->name('food-items.store');
+    Route::put('/food-items/{item}', [FoodItemController::class, 'update'])->name('food-items.update');
+    Route::delete('/food-items/{item}', [FoodItemController::class, 'destroy'])->name('food-items.destroy');
+    Route::post('/food-items/{item}/toggle-status', [FoodItemController::class, 'toggleStatus'])->name('food-items.toggle-status');
+    Route::post('/food-items/{item}/toggle-featured', [FoodItemController::class, 'toggleFeatured'])->name('food-items.toggle-featured');
+    Route::post('/food-items/update-order', [FoodItemController::class, 'updateOrder'])->name('food-items.update-order');
+    Route::put('/food-items/{item}/update-stock', [FoodItemController::class, 'updateStock'])->name('food-items.update-stock');
+
+    // Other admin routes
+    Route::get('/reports', function () {
+        return Inertia::render('Admin/Reports/Index');
+    })->name('reports.index');
+
+    Route::get('/roles', function () {
+        return Inertia::render('Admin/Roles/Index');
+    })->name('roles.index');
+
+    Route::get('/inventory', function () {
+        return Inertia::render('Admin/Inventory/Index');
+    })->name('inventory.index');
+
+    Route::get('/settings', function () {
+        return Inertia::render('Admin/Settings/Index');
+    })->name('settings.index');
+});
+
+// Cashier routes
+Route::middleware(['auth', 'verified', 'role:resto,admin'])->prefix('cashier')->group(function () {
+    Route::get('/', function () {
+        return Inertia::render('Cashier/Dashboard');
     });
 });
 
-require __DIR__.'/auth.php';
+// Kitchen routes
+Route::middleware(['auth', 'verified', 'role:kitchen,admin'])->prefix('kitchen')->group(function () {
+    Route::get('/', function () {
+        return Inertia::render('Kitchen/Dashboard');
+    });
+});
+
+// Customer routes
+Route::middleware(['auth', 'verified', 'role:customer'])->group(function () {
+    Route::get('/menu', function () {
+        return Inertia::render('Customer/Menu');
+    });
+});
+
+// Add a GET logout route for convenience (optional)
+Route::get('/logout', function () {
+    Auth::logout();
+    request()->session()->invalidate();
+    request()->session()->regenerateToken();
+    return redirect('/');
+});

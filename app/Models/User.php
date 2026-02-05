@@ -2,44 +2,32 @@
 
 namespace App\Models;
 
-// use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
-use Spatie\Permission\Traits\HasRoles;
 
 class User extends Authenticatable
 {
-    /** @use HasFactory<\Database\Factories\UserFactory> */
-    use HasFactory, Notifiable, HasRoles;
+    use HasFactory, Notifiable;
 
-    /**
-     * The attributes that are mass assignable.
-     *
-     * @var list<string>
-     */
+    const ROLE_ADMIN = 'admin';
+    const ROLE_RESTO_ADMIN = 'resto_admin';
+    const ROLE_RESTO = 'resto';
+    const ROLE_KITCHEN = 'kitchen';
+    const ROLE_CUSTOMER = 'customer';
+
     protected $fillable = [
         'name',
         'email',
         'password',
-        'restobar_id',
+        'role',
     ];
 
-    /**
-     * The attributes that should be hidden for serialization.
-     *
-     * @var list<string>
-     */
     protected $hidden = [
         'password',
         'remember_token',
     ];
 
-    /**
-     * Get the attributes that should be cast.
-     *
-     * @return array<string, string>
-     */
     protected function casts(): array
     {
         return [
@@ -47,9 +35,39 @@ class User extends Authenticatable
             'password' => 'hashed',
         ];
     }
-    // In app/Models/User.php, add this method:
-    public function restobar()
+
+    public function hasRole(string $role): bool
     {
-        return $this->belongsTo(Restobar::class);
+        return $this->role === $role;
+    }
+
+    public function scopeRole($query, $role)
+    {
+        return $query->where('role', $role);
+    }
+
+    public function isAdmin(): bool
+    {
+        return $this->role === self::ROLE_ADMIN;
+    }
+
+    public function isRestoAdmin(): bool
+    {
+        return $this->role === self::ROLE_RESTO_ADMIN;
+    }
+
+    public function isResto(): bool
+    {
+        return $this->role === self::ROLE_RESTO;
+    }
+
+    public function isKitchen(): bool
+    {
+        return $this->role === self::ROLE_KITCHEN;
+    }
+
+    public function isCustomer(): bool
+    {
+        return $this->role === self::ROLE_CUSTOMER;
     }
 }
