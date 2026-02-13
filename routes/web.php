@@ -3,55 +3,26 @@
 use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\FoodCategoryController;
 use App\Http\Controllers\Admin\FoodItemController;
+use App\Http\Controllers\Admin\ReportsController;
+use App\Http\Controllers\Admin\PosController;
+use App\Http\Controllers\Admin\KitchenController;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
-// Public routes - WITH DEBUG LOGGING
+// Public routes
 Route::get('/', function () {
-    // DEBUG: Log access
-    \Log::info('=== HOME PAGE ACCESSED ===', [
-        'is_authenticated' => Auth::check(),
-        'user_role' => Auth::check() ? Auth::user()->role : 'guest',
-        'session_id' => session()->getId(),
-        'url' => request()->fullUrl(),
-    ]);
-
-    // Check if user is already authenticated
     if (Auth::check()) {
         $user = Auth::user();
-
-        \Log::info('User is logged in, redirecting based on role', [
-            'user_id' => $user->id,
-            'user_name' => $user->name,
-            'user_role' => $user->role,
-        ]);
-
-        // FORCE ADMIN TO ADMIN DASHBOARD
-        if ($user->role === 'admin') {
-            \Log::info('FORCE REDIRECT: Admin user to /admin/dashboard');
-            return redirect('/admin/dashboard');
-        }
-
-        // Redirect based on user role
         $roleRedirects = [
             'admin' => '/admin/dashboard',
-            'resto_admin' => '/cashier',
-            'resto' => '/cashier',
-            'kitchen' => '/kitchen',
+            'resto_admin' => '/cashier/pos',
+            'resto' => '/cashier/pos',
+            'kitchen' => '/admin/kitchen',
             'customer' => '/menu',
         ];
-
-        $redirectTo = $roleRedirects[$user->role] ?? '/admin/dashboard';
-
-        \Log::info('Redirecting user to: ' . $redirectTo);
-
-        return redirect($redirectTo);
+        return redirect($roleRedirects[$user->role] ?? '/admin/dashboard');
     }
-
-    \Log::info('Showing welcome page to guest');
-
-    // Only show welcome page to guests (not logged in users)
     return Inertia::render('Welcome', [
         'canLogin' => Route::has('login'),
         'canRegister' => Route::has('register'),
@@ -65,12 +36,32 @@ require __DIR__.'/auth.php';
 Route::middleware(['auth', 'verified', 'role:admin'])->prefix('admin')->name('admin.')->group(function () {
     Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
 
+    // ==================== POS SYSTEM ====================
+    Route::get('/pos', [PosController::class, 'index'])->name('pos.index');
+    Route::post('/pos/orders', [PosController::class, 'store'])->name('pos.orders.store');
+    Route::post('/orders/{order}/pay', [PosController::class, 'markAsPaid'])->name('orders.pay');
+    Route::post('/orders/{order}/ready', [PosController::class, 'markAsReady'])->name('orders.ready');
+    Route::post('/orders/{order}/preparing', [PosController::class, 'markAsPreparing'])->name('orders.preparing');
+    
+    // 🔥 REAL-TIME POLLING ROUTES (SAME AS KITCHEN)
+    Route::get('/pos/menu-updates', [PosController::class, 'getMenuUpdates'])->name('pos.menu-updates');
+    Route::get('/pos/order-updates', [PosController::class, 'getOrderUpdates'])->name('pos.order-updates');
+    Route::get('/pos/menu-data', [PosController::class, 'getMenuData'])->name('pos.menu-data');
+    Route::get('/pos/order-data', [PosController::class, 'getOrderData'])->name('pos.order-data');
+    
+    // ==================== KITCHEN ROUTES ====================
+    Route::get('/kitchen', [KitchenController::class, 'index'])->name('kitchen.index');
+    Route::get('/kitchen/poll', [KitchenController::class, 'poll'])->name('kitchen.poll');
+    Route::put('/kitchen/order/{sale}/status', [KitchenController::class, 'updateStatus'])->name('kitchen.update-status');
+    Route::put('/kitchen/item/{saleItem}/status', [KitchenController::class, 'updateItemStatus'])->name('kitchen.update-item-status');
+    Route::get('/kitchen/test-alarm', [KitchenController::class, 'testAlarm'])->name('kitchen.test-alarm');
+    Route::get('/kitchen/check-new', [KitchenController::class, 'checkNewOrders'])->name('kitchen.check-new');
+    
     // ==================== FOODS MANAGEMENT ====================
-    // Main foods page (tabs interface like PHP version)
     Route::get('/foods', [FoodCategoryController::class, 'index'])->name('foods.index');
     
-    // Food Categories API Routes
-    Route::get('/food-categories', [FoodCategoryController::class, 'index'])->name('food-categories.index'); // Keep for compatibility
+    // Food Categories API Routes (JSON)
+    Route::get('/food-categories', [FoodCategoryController::class, 'apiIndex'])->name('food-categories.index');
     Route::post('/food-categories', [FoodCategoryController::class, 'store'])->name('food-categories.store');
     Route::put('/food-categories/{category}', [FoodCategoryController::class, 'update'])->name('food-categories.update');
     Route::delete('/food-categories/{category}', [FoodCategoryController::class, 'destroy'])->name('food-categories.destroy');
@@ -78,7 +69,7 @@ Route::middleware(['auth', 'verified', 'role:admin'])->prefix('admin')->name('ad
     Route::post('/food-categories/update-order', [FoodCategoryController::class, 'updateOrder'])->name('food-categories.update-order');
 
     // Food Items API Routes
-    Route::get('/food-items', [FoodItemController::class, 'index'])->name('food-items.index'); // Keep for compatibility
+    Route::get('/food-items', [FoodItemController::class, 'index'])->name('food-items.index');
     Route::post('/food-items', [FoodItemController::class, 'store'])->name('food-items.store');
     Route::put('/food-items/{item}', [FoodItemController::class, 'update'])->name('food-items.update');
     Route::delete('/food-items/{item}', [FoodItemController::class, 'destroy'])->name('food-items.destroy');
@@ -88,9 +79,7 @@ Route::middleware(['auth', 'verified', 'role:admin'])->prefix('admin')->name('ad
     Route::put('/food-items/{item}/update-stock', [FoodItemController::class, 'updateStock'])->name('food-items.update-stock');
 
     // Other admin routes
-    Route::get('/reports', function () {
-        return Inertia::render('Admin/Reports/Index');
-    })->name('reports.index');
+    Route::get('/reports', [ReportsController::class, 'index'])->name('reports.index');
 
     Route::get('/roles', function () {
         return Inertia::render('Admin/Roles/Index');
@@ -105,17 +94,31 @@ Route::middleware(['auth', 'verified', 'role:admin'])->prefix('admin')->name('ad
     })->name('settings.index');
 });
 
-// Cashier routes
+// Cashier routes - REDIRECT DIRECTLY TO POS
 Route::middleware(['auth', 'verified', 'role:resto,admin'])->prefix('cashier')->group(function () {
+    // Redirect cashiers directly to POS
     Route::get('/', function () {
-        return Inertia::render('Cashier/Dashboard');
-    });
+        return redirect('/cashier/pos');
+    })->name('cashier.dashboard');
+    
+    // POS for cashiers
+    Route::get('/pos', [PosController::class, 'index'])->name('cashier.pos');
+    Route::post('/pos/orders', [PosController::class, 'store'])->name('cashier.pos.orders.store');
+    Route::post('/orders/{order}/pay', [PosController::class, 'markAsPaid'])->name('cashier.orders.pay');
+    Route::post('/orders/{order}/ready', [PosController::class, 'markAsReady'])->name('cashier.orders.ready');
+    Route::post('/orders/{order}/preparing', [PosController::class, 'markAsPreparing'])->name('cashier.orders.preparing');
+    
+    // 🔥 CASHIER REAL-TIME ROUTES
+    Route::get('/pos/menu-updates', [PosController::class, 'getMenuUpdates'])->name('cashier.pos.menu-updates');
+    Route::get('/pos/order-updates', [PosController::class, 'getOrderUpdates'])->name('cashier.pos.order-updates');
+    Route::get('/pos/menu-data', [PosController::class, 'getMenuData'])->name('cashier.pos.menu-data');
+    Route::get('/pos/order-data', [PosController::class, 'getOrderData'])->name('cashier.pos.order-data');
 });
 
-// Kitchen routes
+// Kitchen role redirects to admin/kitchen
 Route::middleware(['auth', 'verified', 'role:kitchen,admin'])->prefix('kitchen')->group(function () {
     Route::get('/', function () {
-        return Inertia::render('Kitchen/Dashboard');
+        return redirect('/admin/kitchen');
     });
 });
 

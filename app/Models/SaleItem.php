@@ -16,11 +16,16 @@ class SaleItem extends Model
         'unit_price',
         'total_price',
         'special_instructions',
+        'kitchen_status',        // ADD THIS
+        'kitchen_started_at',    // ADD THIS
+        'kitchen_completed_at',  // ADD THIS
     ];
 
     protected $casts = [
         'unit_price' => 'decimal:2',
         'total_price' => 'decimal:2',
+        'kitchen_started_at' => 'datetime',    // ADD THIS
+        'kitchen_completed_at' => 'datetime',  // ADD THIS
     ];
 
     public function sale()

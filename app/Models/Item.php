@@ -13,25 +13,24 @@ class Item extends Model
         'name',
         'description',
         'price',
-        'category_id', // Changed from 'category'
-        'image_url',
-        'ingredients',
-        'preparation_time',
+        'category_id',
+        'is_available',
         'stock_quantity',
         'low_stock_threshold',
-        'is_available',
-        'is_featured',
-        'sort_order',
+        'pricing_type', // Add this field
+        'price_solo',   // Add this field
+        'price_whole',  // Add this field
+        'sort_order'
     ];
 
     protected $casts = [
-        'price' => 'decimal:2',
         'is_available' => 'boolean',
-        'is_featured' => 'boolean',
-        'preparation_time' => 'integer', // in minutes
+        'price' => 'decimal:2',
+        'price_solo' => 'decimal:2',
+        'price_whole' => 'decimal:2',
         'stock_quantity' => 'integer',
         'low_stock_threshold' => 'integer',
-        'sort_order' => 'integer',
+        'sort_order' => 'integer'
     ];
 
     // Relationship with category
@@ -40,16 +39,10 @@ class Item extends Model
         return $this->belongsTo(Category::class);
     }
 
+    // Relationship with sale items
     public function saleItems()
     {
         return $this->hasMany(SaleItem::class);
-    }
-
-    public function ingredients()
-    {
-        return $this->belongsToMany(Ingredient::class, 'item_ingredients')
-                    ->withPivot('quantity_required')
-                    ->withTimestamps();
     }
 
     // Scope for available items
@@ -58,44 +51,27 @@ class Item extends Model
         return $query->where('is_available', true);
     }
 
-    // Scope for featured items
-    public function scopeFeatured($query)
+    // Get display price based on pricing type
+    public function getDisplayPriceAttribute()
     {
-        return $query->where('is_featured', true);
-    }
-
-    // Scope for low stock items
-    public function scopeLowStock($query)
-    {
-        return $query->whereRaw('stock_quantity <= low_stock_threshold');
-    }
-
-    // Check if item is low in stock
-    public function isLowStock()
-    {
-        return $this->stock_quantity <= $this->low_stock_threshold;
-    }
-
-    // Format price for display
-    public function getFormattedPriceAttribute()
-    {
-        return '₱' . number_format($this->price, 2);
-    }
-
-    // Get preparation time in readable format
-    public function getPreparationTimeFormattedAttribute()
-    {
-        if ($this->preparation_time < 60) {
-            return $this->preparation_time . ' mins';
+        if ($this->pricing_type === 'dual') {
+            return [
+                'solo' => $this->price_solo,
+                'whole' => $this->price_whole
+            ];
         }
-        
-        $hours = floor($this->preparation_time / 60);
-        $minutes = $this->preparation_time % 60;
-        
-        if ($minutes > 0) {
-            return $hours . 'h ' . $minutes . 'm';
-        }
-        
-        return $hours . ' hour' . ($hours > 1 ? 's' : '');
+        return ['single' => $this->price];
+    }
+
+    // Default order
+    public static function boot()
+    {
+        parent::boot();
+
+        static::creating(function ($item) {
+            if (empty($item->sort_order)) {
+                $item->sort_order = self::where('category_id', $item->category_id)->max('sort_order') + 1;
+            }
+        });
     }
 }

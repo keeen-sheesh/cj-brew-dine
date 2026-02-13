@@ -117,7 +117,7 @@ export default function Foods({
     // Format price
     const formatPrice = (price) => {
         return `₱${parseFloat(price).toFixed(2)}`;
-    };
+        };
     
     // SIMPLE AJAX request helper that ALWAYS works
     const makeRequest = async (url, method = 'POST', data = {}) => {

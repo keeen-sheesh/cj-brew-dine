@@ -12,19 +12,19 @@ class Category extends Model
     protected $fillable = [
         'name',
         'description',
-        'is_active',
         'sort_order',
+        'is_active'
     ];
 
     protected $casts = [
         'is_active' => 'boolean',
-        'sort_order' => 'integer',
+        'sort_order' => 'integer'
     ];
 
     // Relationship with items
     public function items()
     {
-        return $this->hasMany(Item::class);
+        return $this->hasMany(Item::class)->orderBy('sort_order', 'asc');
     }
 
     // Scope for active categories
@@ -33,9 +33,15 @@ class Category extends Model
         return $query->where('is_active', true);
     }
 
-    // Scope for ordering
-    public function scopeOrdered($query)
+    // Default order
+    public static function boot()
     {
-        return $query->orderBy('sort_order')->orderBy('name');
+        parent::boot();
+
+        static::creating(function ($category) {
+            if (empty($category->sort_order)) {
+                $category->sort_order = self::max('sort_order') + 1;
+            }
+        });
     }
 }

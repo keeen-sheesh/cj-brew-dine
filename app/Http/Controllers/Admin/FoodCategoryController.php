@@ -12,6 +12,7 @@ use Inertia\Inertia;
 
 class FoodCategoryController extends Controller
 {
+    // This is for the main Foods page (returns Inertia)
     public function index()
     {
         $categories = Category::orderBy('sort_order', 'asc')
@@ -61,6 +62,27 @@ class FoodCategoryController extends Controller
         ]);
     }
 
+    // NEW METHOD: For API calls (returns JSON)
+    public function apiIndex()
+    {
+        $categories = Category::orderBy('sort_order', 'asc')
+            ->orderBy('created_at', 'desc')
+            ->get()
+            ->map(function ($category) {
+                return [
+                    'id' => $category->id,
+                    'name' => $category->name,
+                    'description' => $category->description,
+                    'is_active' => (bool)$category->is_active,
+                    'sort_order' => $category->sort_order,
+                ];
+            });
+            
+        return response()->json([
+            'categories' => $categories
+        ]);
+    }
+
     public function store(Request $request)
     {
         $validated = $request->validate([
@@ -75,13 +97,13 @@ class FoodCategoryController extends Controller
             'name' => $validated['name'],
             'description' => $validated['description'],
             'sort_order' => $maxOrder + 1,
-            'is_active' => true, // New categories are active by default
+            'is_active' => true,
         ]);
         
         // Get updated stats
         $stats = $this->getStats();
         
-        // Always return JSON for Inertia/AJAX requests
+        // Return JSON for AJAX requests
         return response()->json([
             'success' => true,
             'message' => 'Category added successfully!',
@@ -105,7 +127,6 @@ class FoodCategoryController extends Controller
         
         $category->update($validated);
         
-        // Always return JSON for Inertia/AJAX requests
         return response()->json([
             'success' => true,
             'message' => 'Category updated successfully!',
@@ -131,7 +152,6 @@ class FoodCategoryController extends Controller
         
         $category->delete();
         
-        // Get updated stats
         $stats = $this->getStats();
         
         return response()->json([
@@ -147,7 +167,6 @@ class FoodCategoryController extends Controller
             'is_active' => !$category->is_active,
         ]);
         
-        // Get updated stats
         $stats = $this->getStats();
         
         return response()->json([
@@ -158,7 +177,6 @@ class FoodCategoryController extends Controller
         ]);
     }
 
-    // NEW METHOD: Update order for drag-and-drop
     public function updateOrder(Request $request)
     {
         $request->validate([
@@ -192,7 +210,6 @@ class FoodCategoryController extends Controller
         }
     }
 
-    // Helper method to get stats
     private function getStats()
     {
         return [

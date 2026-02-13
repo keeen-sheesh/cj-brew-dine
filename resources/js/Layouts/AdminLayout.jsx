@@ -62,18 +62,19 @@ export default function AdminLayout({ children, auth }) {
         { href: '/admin/settings', icon: Settings, text: 'Settings', active: currentPage === 'settings' },
     ];
     
-    // Get page title safely
+    // Get page title - simplified version
     const getPageTitle = () => {
-        try {
-            // Check if children is a valid React element with props
-            if (React.isValidElement(children) && children.props && children.props.title) {
-                return children.props.title;
-            }
-            return 'Dashboard';
-        } catch (error) {
-            console.error('Error getting page title:', error);
-            return 'Dashboard';
-        }
+        // Default title based on current page
+        const pageTitles = {
+            'dashboard': 'Dashboard Overview',
+            'foods': 'Food Menu Management',
+            'reports': 'Sales Reports',
+            'roles': 'Roles & Users',
+            'inventory': 'Inventory Management',
+            'settings': 'System Settings'
+        };
+        
+        return pageTitles[currentPage] || 'Dashboard';
     };
     
     // Format currency in Philippine Peso
