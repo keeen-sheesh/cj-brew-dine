@@ -34,7 +34,10 @@ require __DIR__.'/auth.php';
 
 // Admin routes
 Route::middleware(['auth', 'verified', 'role:admin'])->prefix('admin')->name('admin.')->group(function () {
+    // ==================== DASHBOARD ROUTES ====================
     Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
+    Route::get('/transactions', [DashboardController::class, 'transactions'])->name('transactions');
+    Route::get('/transactions/{id}', [DashboardController::class, 'getTransaction'])->name('transactions.show');
 
     // ==================== POS SYSTEM ====================
     Route::get('/pos', [PosController::class, 'index'])->name('pos.index');
@@ -42,22 +45,36 @@ Route::middleware(['auth', 'verified', 'role:admin'])->prefix('admin')->name('ad
     Route::post('/orders/{order}/pay', [PosController::class, 'markAsPaid'])->name('orders.pay');
     Route::post('/orders/{order}/ready', [PosController::class, 'markAsReady'])->name('orders.ready');
     Route::post('/orders/{order}/preparing', [PosController::class, 'markAsPreparing'])->name('orders.preparing');
+    Route::post('/orders/{order}/complete', [PosController::class, 'complete'])->name('orders.complete');
     
-    // 🔥 REAL-TIME POLLING ROUTES (SAME AS KITCHEN)
+    // POS Real-time routes
     Route::get('/pos/menu-updates', [PosController::class, 'getMenuUpdates'])->name('pos.menu-updates');
     Route::get('/pos/order-updates', [PosController::class, 'getOrderUpdates'])->name('pos.order-updates');
     Route::get('/pos/menu-data', [PosController::class, 'getMenuData'])->name('pos.menu-data');
     Route::get('/pos/order-data', [PosController::class, 'getOrderData'])->name('pos.order-data');
     
     // ==================== KITCHEN ROUTES ====================
-    Route::get('/kitchen', [KitchenController::class, 'index'])->name('kitchen.index');
-    Route::get('/kitchen/poll', [KitchenController::class, 'poll'])->name('kitchen.poll');
-    Route::put('/kitchen/order/{sale}/status', [KitchenController::class, 'updateStatus'])->name('kitchen.update-status');
-    Route::put('/kitchen/item/{saleItem}/status', [KitchenController::class, 'updateItemStatus'])->name('kitchen.update-item-status');
-    Route::get('/kitchen/test-alarm', [KitchenController::class, 'testAlarm'])->name('kitchen.test-alarm');
-    Route::get('/kitchen/check-new', [KitchenController::class, 'checkNewOrders'])->name('kitchen.check-new');
+    Route::prefix('kitchen')->name('kitchen.')->group(function () {
+        // Main kitchen display
+        Route::get('/', [KitchenController::class, 'index'])->name('index');
+        
+        // Polling and real-time
+        Route::get('/poll', [KitchenController::class, 'poll'])->name('poll');
+        Route::get('/check-new', [KitchenController::class, 'checkNewOrders'])->name('check-new');
+        Route::get('/test-alarm', [KitchenController::class, 'testAlarm'])->name('test-alarm');
+        
+        // Order status updates
+        Route::put('/order/{sale}/status', [KitchenController::class, 'updateStatus'])->name('update-status');
+        Route::put('/item/{saleItem}/status', [KitchenController::class, 'updateItemStatus'])->name('update-item-status');
+        
+        // Kitchen actions
+        Route::post('/orders/{order}/start', [KitchenController::class, 'startPreparing'])->name('start');
+        Route::post('/orders/{order}/ready', [KitchenController::class, 'markReady'])->name('ready');
+        Route::post('/orders/{order}/complete', [KitchenController::class, 'markComplete'])->name('complete');
+    });
     
     // ==================== FOODS MANAGEMENT ====================
+    // Page route (renders the React page)
     Route::get('/foods', [FoodCategoryController::class, 'index'])->name('foods.index');
     
     // Food Categories API Routes (JSON)
@@ -78,37 +95,52 @@ Route::middleware(['auth', 'verified', 'role:admin'])->prefix('admin')->name('ad
     Route::post('/food-items/update-order', [FoodItemController::class, 'updateOrder'])->name('food-items.update-order');
     Route::put('/food-items/{item}/update-stock', [FoodItemController::class, 'updateStock'])->name('food-items.update-stock');
 
+    // ==================== ITEM SIZES ROUTES ====================
+    Route::get('/items/{item}/sizes', function($itemId) {
+        $item = App\Models\Item::with('itemSizes.size')->find($itemId);
+        if (!$item) {
+            return response()->json(['success' => false, 'message' => 'Item not found']);
+        }
+        
+        $sizes = $item->itemSizes->map(function($itemSize) {
+            return [
+                'id' => $itemSize->id,
+                'size_id' => $itemSize->size_id,
+                'size_name' => $itemSize->size->name,
+                'display_name' => $itemSize->size->display_name,
+                'price' => (float) $itemSize->price,
+            ];
+        });
+        
+        return response()->json(['success' => true, 'sizes' => $sizes]);
+    })->name('items.sizes');
+
     // Other admin routes
     Route::get('/reports', [ReportsController::class, 'index'])->name('reports.index');
-
     Route::get('/roles', function () {
         return Inertia::render('Admin/Roles/Index');
     })->name('roles.index');
-
     Route::get('/inventory', function () {
         return Inertia::render('Admin/Inventory/Index');
     })->name('inventory.index');
-
     Route::get('/settings', function () {
         return Inertia::render('Admin/Settings/Index');
     })->name('settings.index');
 });
 
-// Cashier routes - REDIRECT DIRECTLY TO POS
+// Cashier routes
 Route::middleware(['auth', 'verified', 'role:resto,admin'])->prefix('cashier')->group(function () {
-    // Redirect cashiers directly to POS
     Route::get('/', function () {
         return redirect('/cashier/pos');
     })->name('cashier.dashboard');
     
-    // POS for cashiers
     Route::get('/pos', [PosController::class, 'index'])->name('cashier.pos');
     Route::post('/pos/orders', [PosController::class, 'store'])->name('cashier.pos.orders.store');
     Route::post('/orders/{order}/pay', [PosController::class, 'markAsPaid'])->name('cashier.orders.pay');
     Route::post('/orders/{order}/ready', [PosController::class, 'markAsReady'])->name('cashier.orders.ready');
     Route::post('/orders/{order}/preparing', [PosController::class, 'markAsPreparing'])->name('cashier.orders.preparing');
+    Route::post('/orders/{order}/complete', [PosController::class, 'complete'])->name('cashier.orders.complete');
     
-    // 🔥 CASHIER REAL-TIME ROUTES
     Route::get('/pos/menu-updates', [PosController::class, 'getMenuUpdates'])->name('cashier.pos.menu-updates');
     Route::get('/pos/order-updates', [PosController::class, 'getOrderUpdates'])->name('cashier.pos.order-updates');
     Route::get('/pos/menu-data', [PosController::class, 'getMenuData'])->name('cashier.pos.menu-data');

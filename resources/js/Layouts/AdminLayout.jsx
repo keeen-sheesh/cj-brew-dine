@@ -53,28 +53,20 @@ export default function AdminLayout({ children, auth }) {
     
     const navItems = [
         { href: '/admin/dashboard', icon: LayoutDashboard, text: 'Dashboard', active: currentPage === 'dashboard' },
-        { href: '/cashier', icon: CreditCard, text: 'POS System', external: true },
-        { href: '/kitchen', icon: ChefHat, text: 'Kitchen', external: true },
-        { href: '/admin/foods', icon: Utensils, text: 'Food Menu', active: currentPage === 'foods' },
+        { href: '/cashier/pos', icon: CreditCard, text: 'POS System', external: true },
+        { href: '/admin/kitchen', icon: ChefHat, text: 'Kitchen', active: currentPage === 'kitchen' },
+        { href: '/admin/foods', icon: Utensils, text: 'Food Menu', active: currentPage === 'foods' || currentPage === 'categories' || currentPage === 'items' },
         { href: '/admin/reports', icon: BarChart3, text: 'Reports', active: currentPage === 'reports' },
-        { href: '/admin/roles', icon: Users, text: 'Roles & Users', active: currentPage === 'roles' },
+        { href: '/admin/users', icon: Users, text: 'Users', active: currentPage === 'users' },
         { href: '/admin/inventory', icon: Package, text: 'Inventory', active: currentPage === 'inventory' },
         { href: '/admin/settings', icon: Settings, text: 'Settings', active: currentPage === 'settings' },
     ];
     
-    // Get page title - simplified version
-    const getPageTitle = () => {
-        // Default title based on current page
-        const pageTitles = {
-            'dashboard': 'Dashboard Overview',
-            'foods': 'Food Menu Management',
-            'reports': 'Sales Reports',
-            'roles': 'Roles & Users',
-            'inventory': 'Inventory Management',
-            'settings': 'System Settings'
-        };
-        
-        return pageTitles[currentPage] || 'Dashboard';
+    // Get user's first name from full name
+    const getFirstName = () => {
+        if (!auth?.user?.name) return 'User';
+        const firstName = auth.user.name.split(' ')[0];
+        return firstName;
     };
     
     // Format currency in Philippine Peso
@@ -90,6 +82,9 @@ export default function AdminLayout({ children, auth }) {
     
     return (
         <div className="min-h-screen bg-gray-50">
+            {/* CSRF Token Meta Tag - Add this for forms and AJAX */}
+            <meta name="csrf-token" content={document.querySelector('meta[name="csrf-token"]')?.content || ''} />
+            
             {/* Burger Menu Button */}
             {!sidebarOpen && (
                 <button
@@ -101,10 +96,7 @@ export default function AdminLayout({ children, auth }) {
             )}
             
             {/* Sidebar */}
-            <aside className={`
-                fixed inset-y-0 left-0 z-40 w-64 bg-white shadow-xl transform transition-transform duration-300
-                ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0
-            `}>
+            <aside className={`fixed inset-y-0 left-0 z-40 w-64 bg-white shadow-xl transform transition-transform duration-300 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0`}>
                 <div className="flex flex-col h-full">
                     {/* Sidebar Header */}
                     <div className="p-6 border-b">
@@ -148,10 +140,8 @@ export default function AdminLayout({ children, auth }) {
                             {navItems.map((item) => (
                                 <li key={item.href}>
                                     {item.external ? (
-                                        <a
+                                        <Link
                                             href={item.href}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
                                             className={`flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${
                                                 item.active
                                                     ? 'bg-yellow-50 text-yellow-600 border-l-4 border-yellow-500'
@@ -160,7 +150,7 @@ export default function AdminLayout({ children, auth }) {
                                         >
                                             <item.icon className="w-5 h-5" />
                                             <span>{item.text}</span>
-                                        </a>
+                                        </Link>
                                     ) : (
                                         <Link
                                             href={item.href}
@@ -208,7 +198,7 @@ export default function AdminLayout({ children, auth }) {
                         <div className="flex items-center justify-between">
                             <div>
                                 <h2 className="text-xl font-semibold text-gray-900">
-                                    {getPageTitle()}
+                                    Hello, {getFirstName()}! 
                                 </h2>
                                 <div className="flex items-center space-x-2 text-sm text-gray-500">
                                     <Calendar className="w-4 h-4" />
@@ -221,13 +211,14 @@ export default function AdminLayout({ children, auth }) {
                                 </div>
                             </div>
                             <div className="flex items-center space-x-4">
-                                <button className="p-2 hover:bg-gray-100 rounded-lg">
+                                <button 
+                                    onClick={() => window.location.reload()}
+                                    className="p-2 hover:bg-gray-100 rounded-lg"
+                                    title="Refresh Page"
+                                >
                                     <RefreshCw className="w-5 h-5 text-gray-600" />
                                 </button>
-                                <button className="relative p-2 hover:bg-gray-100 rounded-lg">
-                                    <Bell className="w-5 h-5 text-gray-600" />
-                                    <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
-                                </button>
+                                {/* Notification button removed as requested */}
                             </div>
                         </div>
                     </div>

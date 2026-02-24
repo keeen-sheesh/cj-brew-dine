@@ -1,5 +1,5 @@
 // resources/js/Pages/Admin/POS.jsx
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Head, usePage, router } from '@inertiajs/react';
 import { 
     ShoppingCart, 
@@ -15,24 +15,17 @@ import {
     Minus,
     Search,
     AlertCircle,
-    ChevronRight,
     X,
     Printer,
     ChefHat,
     ArrowLeft,
     Loader2,
-    Receipt,
-    DollarSign,
     Percent,
     Tag,
     Edit,
-    MessageSquare,
-    Phone,
-    Check,
     Grid,
     List,
     Star,
-    Zap,
     Coffee,
     Pizza,
     Salad,
@@ -41,7 +34,6 @@ import {
     Milk,
     GlassWater,
     Wine,
-    Drumstick,
     Utensils,
     Crown,
     Sparkles,
@@ -52,7 +44,24 @@ import {
     Ban,
     CheckSquare,
     Wifi,
-    WifiOff
+    WifiOff,
+    Hotel,
+    Wallet,
+    DollarSign,
+    ChevronLeft,
+    ChevronRight,
+    Building,
+    Hash,
+    Flame,
+    Check,
+    Hourglass,
+    Zap,
+    Activity,
+    AlertTriangle,
+    BadgePercent,
+    Briefcase,
+    Building2,
+    MessageSquare
 } from 'lucide-react';
 
 // Category icons mapping
@@ -72,546 +81,1022 @@ const categoryIcons = {
     'Non Based Coffee': Coffee,
     'Specialty': Crown,
     'Seasonal': Star,
+    'Rice (4-5 persons)': Utensils,
+    'Soup and Salad': Soup,
+    'Casa Jedliana Soup': Soup,
+    'Side dish': Utensils,
+    'Pork': ChefHat,
+    'Chicken': ChefHat,
+    'Fish & Seafoods': ChefHat,
+    'Vegetables': Salad,
+    'Rice in a bowl': Utensils,
+    'Set Meals': Package,
+    'American Breakfast': Coffee,
+    'Filipino Breakfast': Coffee,
+    'Breakfast Side dish': Utensils,
+    'Beverages': Wine,
+    'Add Ons': Plus,
 };
 
 // Order type options
 const ORDER_TYPES = [
+    { value: 'dine_in', label: 'Dine In', icon: TableIcon, color: 'bg-blue-500' },
     { value: 'takeout', label: 'Takeout', icon: Package, color: 'bg-emerald-500' },
     { value: 'delivery', label: 'Delivery', icon: Truck, color: 'bg-purple-500' },
-    { value: 'dine_in', label: 'Dine In', icon: TableIcon, color: 'bg-blue-500' },
 ];
 
-// Price formatting helper function
+// Payment methods
+const PAYMENT_METHODS = [
+    { id: 1, name: 'Cash', icon: DollarSign, color: 'bg-green-500', textColor: 'text-green-600', bgColor: 'bg-green-50' },
+    { id: 2, name: 'Card', icon: CreditCard, color: 'bg-blue-500', textColor: 'text-blue-600', bgColor: 'bg-blue-50' },
+    { id: 3, name: 'E-Wallet', icon: Wallet, color: 'bg-purple-500', textColor: 'text-purple-600', bgColor: 'bg-purple-50' },
+    { id: 4, name: 'Hotel', icon: Hotel, color: 'bg-amber-500', textColor: 'text-amber-600', bgColor: 'bg-amber-50' },
+];
+
+// Price formatting
 const formatPrice = (price) => {
     if (price === null || price === undefined || price === '') return '0.00';
     const numPrice = Number(price);
     if (isNaN(numPrice)) return '0.00';
-    return numPrice.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return numPrice.toFixed(2);
 };
 
-// Product Availability Badge Component
-const AvailabilityBadge = ({ isAvailable, stock }) => {
-    if (!isAvailable) {
-        return (
-            <span className="px-2 py-1 text-xs font-medium bg-red-100 text-red-800 rounded-full flex items-center gap-1">
-                <Ban className="w-3 h-3" />
-                Unavailable
-            </span>
-        );
+// Philippine time formatting
+const formatPhilippineTime = (dateString) => {
+    if (!dateString) return '';
+    try {
+        const date = new Date(dateString);
+        return date.toLocaleTimeString('en-PH', { 
+            hour: '2-digit', 
+            minute: '2-digit',
+            hour12: true,
+            timeZone: 'Asia/Manila'
+        });
+    } catch (e) {
+        return '';
     }
-    
-    if (stock !== null && stock <= 5) {
-        return (
-            <span className="px-2 py-1 text-xs font-medium bg-yellow-100 text-yellow-800 rounded-full">
-                Low Stock: {stock}
-            </span>
-        );
+};
+
+const getCurrentPhilippineTime = () => {
+    return new Date().toLocaleTimeString('en-PH', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true,
+        timeZone: 'Asia/Manila'
+    });
+};
+
+const getCurrentPhilippineDate = () => {
+    return new Date().toLocaleDateString('en-PH', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        timeZone: 'Asia/Manila'
+    });
+};
+
+// Get image URL helper function
+const getImageUrl = (imagePath) => {
+    if (!imagePath) return null;
+    if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
+        return imagePath;
     }
-    
-    return (
-        <span className="px-2 py-1 text-xs font-medium bg-green-100 text-green-800 rounded-full flex items-center gap-1">
-            <CheckSquare className="w-3 h-3" />
-            Available
-        </span>
-    );
+    const cleanPath = imagePath.replace(/^storage\//, '');
+    return `/storage/${cleanPath}`;
+};
+
+// Category groups for employee discounts
+const CATEGORY_GROUPS = {
+    COFFEE: ['Coffee Based', 'Coffee', 'Milk Based', 'Frappe'],
+    SODA: ['Soda', 'Soda & Bottled Drinks'],
+    ADD_ONS: ['Add ons', 'Add Ons'],
+    FOOD: [
+        'Rice (4-5 persons)', 'Soup and Salad', 'Appetizer', 'Burgers & Sandwich',
+        'Casa Jedliana Soup', 'Salad', 'Pasta', 'Noodles', 'Side dish', 'Pork',
+        'Chicken', 'Fish & Seafoods', 'Vegetables', 'Rice in a bowl', 'Set Meals',
+        'American Breakfast', 'Filipino Breakfast', 'Breakfast Side dish',
+        'Main Dish', 'Burgers & Sandwiches', 'Appetizers', 'Soup'
+    ]
 };
 
 export default function POS({ 
     categories: initialCategories = [], 
-    tables = [], 
-    paymentMethods = [], 
-    readyOrders = [], 
+    paymentMethods: initialPaymentMethods = [],
     pendingOrders: initialPendingOrders = [],
+    readyOrders = [],
     appName = 'Restaurant POS',
     flash = {}
 }) {
     const { auth } = usePage().props;
     
-    // State management
+    // ============ STATE MANAGEMENT ============
     const [categories, setCategories] = useState(initialCategories);
     const [pendingOrders, setPendingOrders] = useState(initialPendingOrders);
     const [orderItems, setOrderItems] = useState([]);
     const [activeCategory, setActiveCategory] = useState('all');
-    const [orderType, setOrderType] = useState('takeout');
-    const [customerInfo, setCustomerInfo] = useState({
-        name: '',
-        phone: '',
-        address: '',
-        notes: ''
-    });
+    const [orderType, setOrderType] = useState('dine_in');
+    const [customerInfo, setCustomerInfo] = useState({ name: '', phone: '', address: '', notes: '' });
+    
+    // Hotel specific fields
+    const [hotelInfo, setHotelInfo] = useState({ guestName: '', roomNumber: '' });
+    
     const [peopleCount, setPeopleCount] = useState(1);
     const [cardsPresented, setCardsPresented] = useState(0);
     const [discount, setDiscount] = useState({ type: 'none', value: 0 });
-    const [showDiscountModal, setShowDiscountModal] = useState(false);
-    const [showCustomerModal, setShowCustomerModal] = useState(false);
-    const [isLoading, setIsLoading] = useState(false);
-    const [notification, setNotification] = useState(null);
-    const [processingOrder, setProcessingOrder] = useState(null);
-    const [viewMode, setViewMode] = useState('grid');
-    const [selectedTable, setSelectedTable] = useState(null);
     const [searchQuery, setSearchQuery] = useState('');
     const [showOnlyAvailable, setShowOnlyAvailable] = useState(true);
+    const [isLoading, setIsLoading] = useState(false);
+    const [processingOrder, setProcessingOrder] = useState(null);
+    const [notification, setNotification] = useState(null);
+    const [readyOrderNotifications, setReadyOrderNotifications] = useState([]);
+    const [successOrder, setSuccessOrder] = useState(null);
     const [connectionStatus, setConnectionStatus] = useState('connected');
     const [lastUpdate, setLastUpdate] = useState(new Date());
+    const [showPendingOrders, setShowPendingOrders] = useState(true);
+    const [selectedTable, setSelectedTable] = useState(null);
     
-    // NEW STATE: Success order popup
-    const [successOrder, setSuccessOrder] = useState(null);
+    // Item notes state
+    const [itemNotes, setItemNotes] = useState({});
+    const [showNotesModal, setShowNotesModal] = useState(false);
+    const [selectedItemForNotes, setSelectedItemForNotes] = useState(null);
+    const [currentNote, setCurrentNote] = useState('');
     
-    // Refs for scrollable areas
-    const menuRef = useRef(null);
-    const cartRef = useRef(null);
+    // Auto-refresh state
+    const [isPollingActive, setIsPollingActive] = useState(true);
+    const [pollingStats, setPollingStats] = useState({ menu: 0, orders: 0, errors: 0 });
+    const [lastMenuUpdate, setLastMenuUpdate] = useState(Date.now());
+    const [lastOrderUpdate, setLastOrderUpdate] = useState(Date.now());
+    
+    // Modal states
+    const [showPaymentModal, setShowPaymentModal] = useState(false);
+    const [showDiscountModal, setShowDiscountModal] = useState(false);
+    const [selectedPaymentMethod, setSelectedPaymentMethod] = useState(null);
+    const [cashAmount, setCashAmount] = useState('');
+    const [modalPeopleCount, setModalPeopleCount] = useState(1);
+    const [modalCardsPresented, setModalCardsPresented] = useState(0);
+    const [modalIsEmployee, setModalIsEmployee] = useState(false);
+    
+    // Refs
+    const audioRef = useRef(null);
+    const menuPollTimeoutRef = useRef(null);
+    const orderPollTimeoutRef = useRef(null);
+    const mountedRef = useRef(true);
+    
+    // Current time state for header
+    const [currentTime, setCurrentTime] = useState(getCurrentPhilippineTime());
+    const [currentDate, setCurrentDate] = useState(getCurrentPhilippineDate());
 
-    // 🔥 REAL-TIME POLLING: Same as Kitchen.jsx (every 2 seconds)
+    // Initialize audio
     useEffect(() => {
-        const pollInterval = setInterval(() => {
-            checkForMenuUpdates();
-            checkForOrderUpdates();
-        }, 2000); // 2 seconds - matches kitchen polling
+        audioRef.current = new Audio('/sound1.mp3');
+        audioRef.current.volume = 0.5;
         
-        return () => clearInterval(pollInterval);
+        return () => {
+            if (audioRef.current) {
+                audioRef.current.pause();
+                audioRef.current.src = '';
+            }
+        };
     }, []);
 
-    // Check for menu updates (availability, price changes, etc.)
-    const checkForMenuUpdates = async () => {
+    // Update time every second
+    useEffect(() => {
+        const timer = setInterval(() => {
+            setCurrentTime(getCurrentPhilippineTime());
+            setCurrentDate(getCurrentPhilippineDate());
+        }, 1000);
+        
+        return () => clearInterval(timer);
+    }, []);
+
+    // Cleanup on unmount
+    useEffect(() => {
+        return () => {
+            mountedRef.current = false;
+            if (menuPollTimeoutRef.current) clearTimeout(menuPollTimeoutRef.current);
+            if (orderPollTimeoutRef.current) clearTimeout(orderPollTimeoutRef.current);
+        };
+    }, []);
+
+    // ============ PROFESSIONAL AUTO-REFRESH WITH ADAPTIVE POLLING ============
+    
+    // Menu polling function
+    const pollMenuUpdates = useCallback(async () => {
+        if (!mountedRef.current || !isPollingActive) return;
+        
         try {
-            const response = await fetch('/admin/pos/menu-updates', {
-                method: 'GET',
+            const response = await fetch(`/cashier/pos/menu-updates?last_update=${lastMenuUpdate}`, {
                 headers: {
                     'Accept': 'application/json',
                     'X-Requested-With': 'XMLHttpRequest',
+                    'Cache-Control': 'no-cache',
                 },
             });
             
-            if (!response.ok) throw new Error('Failed to fetch');
+            if (!mountedRef.current) return;
             
-            const data = await response.json();
-            
-            if (data.success && data.updated_menu) {
-                setCategories(data.updated_menu);
-                setLastUpdate(new Date());
+            if (response.ok) {
+                const data = await response.json();
                 
-                // Check if any cart items are now unavailable
-                const updatedItems = orderItems.map(cartItem => {
-                    const menuItem = data.updated_menu
-                        .flatMap(cat => cat.items || [])
-                        .find(item => item.id === cartItem.id);
+                if (data.success) {
+                    setConnectionStatus('connected');
+                    setPollingStats(prev => ({ ...prev, menu: prev.menu + 1, errors: 0 }));
                     
-                    if (menuItem && (menuItem.is_available === false || menuItem.stock === 0)) {
-                        return { ...cartItem, is_available: false };
+                    if (data.updated && data.categories) {
+                        setCategories(data.categories);
+                        setLastMenuUpdate(data.menu_last_updated || Date.now());
+                        setLastUpdate(new Date());
                     }
-                    return cartItem;
-                });
+                    
+                    if (mountedRef.current && isPollingActive) {
+                        menuPollTimeoutRef.current = setTimeout(pollMenuUpdates, 2000);
+                    }
+                } else {
+                    throw new Error('Invalid response');
+                }
+            } else {
+                throw new Error(`HTTP ${response.status}`);
+            }
+        } catch (error) {
+            console.error('Menu polling error:', error);
+            
+            if (!mountedRef.current) return;
+            
+            setConnectionStatus('disconnected');
+            setPollingStats(prev => ({ ...prev, errors: prev.errors + 1 }));
+            
+            const backoffTime = Math.min(30000, 2000 * Math.pow(1.5, pollingStats.errors));
+            
+            if (mountedRef.current && isPollingActive) {
+                menuPollTimeoutRef.current = setTimeout(pollMenuUpdates, backoffTime);
+            }
+        }
+    }, [lastMenuUpdate, isPollingActive, pollingStats.errors]);
+
+    // Order polling function - checks for ready orders
+    const pollOrderUpdates = useCallback(async () => {
+        if (!mountedRef.current || !isPollingActive) return;
+        
+        try {
+            const response = await fetch(`/cashier/pos/order-updates?last_update=${lastOrderUpdate}`, {
+                headers: {
+                    'Accept': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Cache-Control': 'no-cache',
+                },
+            });
+            
+            if (!mountedRef.current) return;
+            
+            if (response.ok) {
+                const data = await response.json();
                 
-                const unavailableItems = updatedItems.filter(item => item.is_available === false);
-                if (unavailableItems.length > 0) {
-                    setOrderItems(updatedItems);
-                    showNotification(`${unavailableItems.length} items are no longer available`, 'warning');
+                if (data.success) {
+                    setConnectionStatus('connected');
+                    setPollingStats(prev => ({ ...prev, orders: prev.orders + 1, errors: 0 }));
+                    
+                    if (data.pending_orders) {
+                        // Format order numbers for display
+                        const formattedOrders = data.pending_orders.map(order => ({
+                            ...order,
+                            display_order_number: order.order_number || `ORD-${String(order.id).padStart(5, '0')}`
+                        }));
+                        
+                        // Check for newly ready orders
+                        const previousOrders = pendingOrders;
+                        const newReadyOrders = formattedOrders.filter(newOrder => {
+                            const oldOrder = previousOrders.find(o => o.id === newOrder.id);
+                            // If order was not ready before but is now ready
+                            return oldOrder && oldOrder.status !== 'ready' && newOrder.status === 'ready';
+                        });
+                        
+                        // Add new ready orders to notifications
+                        if (newReadyOrders.length > 0) {
+                            setReadyOrderNotifications(prev => [
+                                ...prev,
+                                ...newReadyOrders.map(order => ({
+                                    id: order.id,
+                                    orderNumber: order.display_order_number,
+                                    customerName: order.customer_name || 'Walk-in Customer',
+                                    isHotel: order.payment_method_name === 'Hotel',
+                                    roomNumber: order.room_number,
+                                    timestamp: Date.now()
+                                }))
+                            ]);
+                        }
+                        
+                        setPendingOrders(formattedOrders);
+                    }
+                    
+                    setLastOrderUpdate(Date.now());
+                    setLastUpdate(new Date());
+                    
+                    if (mountedRef.current && isPollingActive) {
+                        orderPollTimeoutRef.current = setTimeout(pollOrderUpdates, 3000);
+                    }
+                } else {
+                    throw new Error('Invalid response');
+                }
+            } else {
+                throw new Error(`HTTP ${response.status}`);
+            }
+        } catch (error) {
+            console.error('Order polling error:', error);
+            
+            if (!mountedRef.current) return;
+            
+            setConnectionStatus('disconnected');
+            setPollingStats(prev => ({ ...prev, errors: prev.errors + 1 }));
+            
+            const backoffTime = Math.min(30000, 3000 * Math.pow(1.5, pollingStats.errors));
+            
+            if (mountedRef.current && isPollingActive) {
+                orderPollTimeoutRef.current = setTimeout(pollOrderUpdates, backoffTime);
+            }
+        }
+    }, [lastOrderUpdate, isPollingActive, pollingStats.errors, pendingOrders]);
+
+    // Start polling
+    useEffect(() => {
+        pollMenuUpdates();
+        pollOrderUpdates();
+        
+        const handleVisibilityChange = () => {
+            setIsPollingActive(!document.hidden);
+        };
+        
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        
+        return () => {
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+            if (menuPollTimeoutRef.current) clearTimeout(menuPollTimeoutRef.current);
+            if (orderPollTimeoutRef.current) clearTimeout(orderPollTimeoutRef.current);
+        };
+    }, [pollMenuUpdates, pollOrderUpdates]);
+
+    // Helper function to get category name by ID
+    const getCategoryName = (categoryId) => {
+        for (const category of categories) {
+            if (category.id === categoryId) {
+                return category.name;
+            }
+            // Check if items have category_name directly
+            if (category.items) {
+                const item = category.items.find(i => i.id === categoryId);
+                if (item) return category.name;
+            }
+        }
+        return '';
+    };
+
+    // Calculate employee discounts based on category
+    const calculateEmployeeDiscount = (items) => {
+        let totalEmployeeDiscount = 0;
+        
+        items.forEach(item => {
+            // Find the category name for this item
+            let categoryName = '';
+            for (const category of categories) {
+                const found = category.items?.find(i => i.id === item.id);
+                if (found) {
+                    categoryName = category.name;
+                    break;
                 }
             }
-        } catch (error) {
-            console.log('Menu polling error:', error);
-            setConnectionStatus('disconnected');
-        }
-    };
-
-    // Check for pending orders updates
-    const checkForOrderUpdates = async () => {
-        try {
-            const response = await fetch('/admin/pos/order-updates', {
-                method: 'GET',
-                headers: {
-                    'Accept': 'application/json',
-                    'X-Requested-With': 'XMLHttpRequest',
-                },
-            });
             
-            if (!response.ok) throw new Error('Failed to fetch');
+            const itemSubtotal = Number(item.price) * item.quantity;
             
-            const data = await response.json();
-            
-            if (data.success && data.pending_orders) {
-                setPendingOrders(data.pending_orders);
-                setConnectionStatus('connected');
+            // Apply discount based on category
+            if (CATEGORY_GROUPS.COFFEE.includes(categoryName)) {
+                // Coffee, Milk Based, Frappe - 20% discount
+                totalEmployeeDiscount += itemSubtotal * 0.20;
+            } else if (CATEGORY_GROUPS.SODA.includes(categoryName)) {
+                // Soda - 10% discount
+                totalEmployeeDiscount += itemSubtotal * 0.10;
+            } else if (CATEGORY_GROUPS.FOOD.includes(categoryName)) {
+                // All food categories - 5% discount
+                totalEmployeeDiscount += itemSubtotal * 0.05;
             }
-        } catch (error) {
-            console.log('Order polling error:', error);
-        }
-    };
-
-    // Manual refresh function
-    const refreshAllData = async () => {
-        try {
-            setIsLoading(true);
-            const [menuResponse, ordersResponse] = await Promise.all([
-                fetch('/admin/pos/menu-data'),
-                fetch('/admin/pos/order-data')
-            ]);
-            
-            const menuData = await menuResponse.json();
-            const ordersData = await ordersResponse.json();
-            
-            if (menuData.categories) {
-                setCategories(menuData.categories);
-            }
-            
-            if (ordersData.pending_orders) {
-                setPendingOrders(ordersData.pending_orders);
-            }
-            
-            setLastUpdate(new Date());
-            showNotification('Data refreshed successfully', 'success');
-            
-        } catch (error) {
-            console.error('Failed to refresh data:', error);
-            showNotification('Failed to refresh data', 'error');
-        } finally {
-            setIsLoading(false);
-        }
-    };
-
-    // ✅ FIXED DISCOUNT CALCULATION: total × 20% ÷ people × cards
-    const calculateDiscount = () => {
-        const subtotal = orderItems.reduce((sum, item) => sum + (Number(item.price) * item.quantity), 0);
+            // Add-ons - no discount (0%)
+        });
         
-        // Card discount: total × 20% ÷ people × cards
+        return Math.round(totalEmployeeDiscount * 100) / 100;
+    };
+
+    // ============ CALCULATIONS ============
+    const calculateTotals = (people, cards, discType, discValue, isEmployeeActive, items, selectedPaymentMethod) => {
+        const subtotal = items.reduce((sum, item) => sum + (Number(item.price) * item.quantity), 0);
+        
+        // Step 1: Calculate employee discount if active
+        let employeeDiscount = 0;
+        if (isEmployeeActive) {
+            employeeDiscount = calculateEmployeeDiscount(items);
+        }
+        
+        // Step 2: Calculate card discount (20% per card) - applies to subtotal after employee discount
+        let afterEmployeeDiscount = subtotal - employeeDiscount;
         let cardDiscount = 0;
-        if (cardsPresented > 0 && peopleCount > 0) {
-            cardDiscount = (subtotal * 0.20) / peopleCount * cardsPresented;
+        if (cards > 0 && people > 0) {
+            cardDiscount = (afterEmployeeDiscount * 0.20) / people * cards;
             cardDiscount = Math.round(cardDiscount * 100) / 100;
         }
         
-        // Additional discount
+        // Step 3: Calculate additional manual discount - applies after employee and card discounts
+        let afterCardDiscount = afterEmployeeDiscount - cardDiscount;
         let additionalDiscount = 0;
-        if (discount.type === 'percentage' && discount.value > 0) {
-            additionalDiscount = (subtotal * discount.value) / 100;
-        } else if (discount.type === 'fixed' && discount.value > 0) {
-            additionalDiscount = discount.value;
+        if (discType === 'percentage' && discValue > 0) {
+            additionalDiscount = (afterCardDiscount * discValue) / 100;
+        } else if (discType === 'fixed' && discValue > 0) {
+            additionalDiscount = discValue;
         }
+        additionalDiscount = Math.round(additionalDiscount * 100) / 100;
+        
+        // Step 4: Calculate total after all discounts
+        let afterAllDiscounts = afterCardDiscount - additionalDiscount;
+        
+        // Step 5: Apply hotel service charge (10%) if payment method is Hotel - applies after all discounts
+        let serviceCharge = 0;
+        if (selectedPaymentMethod?.name === 'Hotel') {
+            serviceCharge = afterAllDiscounts * 0.10;
+            serviceCharge = Math.round(serviceCharge * 100) / 100;
+        }
+        
+        const finalTotal = afterAllDiscounts + serviceCharge;
         
         return {
             subtotal,
+            employeeDiscount,
             cardDiscount,
             additionalDiscount,
-            totalDiscount: cardDiscount + additionalDiscount,
-            total: subtotal - (cardDiscount + additionalDiscount)
+            serviceCharge,
+            totalDiscount: employeeDiscount + cardDiscount + additionalDiscount,
+            total: finalTotal < 0 ? 0 : finalTotal
         };
     };
 
-    const { subtotal, cardDiscount, additionalDiscount, totalDiscount, total } = calculateDiscount();
+    const { subtotal, employeeDiscount, cardDiscount, additionalDiscount, serviceCharge, total } = calculateTotals(
+        peopleCount, cardsPresented, discount.type, discount.value, modalIsEmployee, orderItems, selectedPaymentMethod
+    );
 
-    // Filter items based on availability and search
+    const modalTotals = calculateTotals(
+        modalPeopleCount, modalCardsPresented, discount.type, discount.value, modalIsEmployee, orderItems, selectedPaymentMethod
+    );
+
+    // ============ FILTERING ============
     const filterItems = (items) => {
-        let filtered = items;
-        
-        // Filter by availability if enabled
+        let filtered = items || [];
         if (showOnlyAvailable) {
             filtered = filtered.filter(item => item.is_available !== false);
         }
-        
-        // Filter by search query
         if (searchQuery) {
             const query = searchQuery.toLowerCase();
             filtered = filtered.filter(item => 
                 item.name.toLowerCase().includes(query) ||
-                item.description?.toLowerCase().includes(query)
+                (item.description && item.description.toLowerCase().includes(query))
             );
         }
-        
         return filtered;
     };
 
-    const filteredItems = activeCategory === 'all' 
-        ? filterItems(categories.flatMap(cat => cat.items || []))
-        : filterItems(categories.find(cat => cat.id.toString() === activeCategory)?.items || []);
+    const getFilteredItems = () => {
+        if (!categories || categories.length === 0) return [];
+        
+        const allItems = categories.flatMap(cat => 
+            (cat.items || []).map(item => ({
+                ...item,
+                category_name: cat.name,
+                category_id: cat.id
+            }))
+        );
 
-    // Show notification
+        if (activeCategory === 'all') {
+            return filterItems(allItems);
+        } else {
+            return filterItems(allItems.filter(item => item.category_id.toString() === activeCategory));
+        }
+    };
+
+    const filteredItems = getFilteredItems();
+
+    // ============ NOTIFICATIONS ============
     const showNotification = (message, type = 'success') => {
-        setNotification({ message, type, timestamp: new Date() });
+        setNotification({ message, type });
         setTimeout(() => setNotification(null), 4000);
     };
 
-    // Show success order popup
+    // Dismiss a ready order notification
+    const dismissReadyNotification = (notificationId) => {
+        setReadyOrderNotifications(prev => prev.filter(n => n.id !== notificationId));
+    };
+
+    // Dismiss all ready order notifications
+    const dismissAllNotifications = () => {
+        setReadyOrderNotifications([]);
+    };
+
     const showSuccessOrder = (orderData) => {
         setSuccessOrder(orderData);
         setTimeout(() => setSuccessOrder(null), 5000);
     };
 
-    // Reset order function
-    const resetOrder = () => {
-        setOrderItems([]);
-        setCustomerInfo({ name: '', phone: '', address: '', notes: '' });
-        setPeopleCount(1);
-        setCardsPresented(0);
-        setDiscount({ type: 'none', value: 0 });
-        setSelectedTable(null);
-        showNotification('Order has been reset', 'info');
-    };
-
-    // Add item to order with availability check
+    // ============ ORDER MANAGEMENT WITH STOCK CHECKING ============
     const addToOrder = (item) => {
         if (item.is_available === false) {
-            showNotification(`${item.name} is currently unavailable`, 'error');
+            showNotification(`${item.name} is unavailable`, 'error');
             return;
         }
         
-        if (item.stock !== null && item.stock <= 0) {
-            showNotification(`${item.name} is out of stock`, 'error');
-            return;
+        if (item.stock_quantity !== null) {
+            const existingItem = orderItems.find(oi => oi.id === item.id);
+            const currentQuantity = existingItem ? existingItem.quantity : 0;
+            
+            if (currentQuantity + 1 > item.stock_quantity) {
+                showNotification(`Only ${item.stock_quantity} ${item.stock_quantity === 1 ? 'item' : 'items'} available`, 'error');
+                return;
+            }
         }
         
-        const existingItemIndex = orderItems.findIndex(
-            orderItem => orderItem.id === item.id
-        );
+        const existingItemIndex = orderItems.findIndex(oi => oi.id === item.id);
         
         if (existingItemIndex >= 0) {
             const updatedItems = [...orderItems];
             updatedItems[existingItemIndex].quantity += 1;
             setOrderItems(updatedItems);
         } else {
-            const newItem = {
+            setOrderItems([...orderItems, {
                 id: item.id,
                 name: item.name,
                 price: Number(item.price),
                 quantity: 1,
-                is_available: item.is_available,
-                stock: item.stock
-            };
-            setOrderItems([...orderItems, newItem]);
+                stock: item.stock_quantity,
+                originalStock: item.stock_quantity,
+                image: item.image,
+                notes: ''
+            }]);
         }
         
-        showNotification(`${item.name} added to order`, 'success');
+        showNotification(`${item.name} added`, 'success');
     };
 
-    // Update item quantity with stock check
+    // Open notes modal for item
+    const openNotesModal = (index) => {
+        setSelectedItemForNotes(index);
+        setCurrentNote(orderItems[index].notes || '');
+        setShowNotesModal(true);
+    };
+
+    // Save note for item
+    const saveItemNote = () => {
+        if (selectedItemForNotes !== null) {
+            const updatedItems = [...orderItems];
+            updatedItems[selectedItemForNotes].notes = currentNote;
+            setOrderItems(updatedItems);
+            setShowNotesModal(false);
+            setSelectedItemForNotes(null);
+            setCurrentNote('');
+            showNotification('Note added', 'success');
+        }
+    };
+
     const updateQuantity = (index, change) => {
         const updatedItems = [...orderItems];
         const item = updatedItems[index];
         const newQuantity = item.quantity + change;
         
         if (newQuantity < 1) {
-            removeItem(index);
+            updatedItems.splice(index, 1);
+            setOrderItems(updatedItems);
+            showNotification(`${item.name} removed`, 'info');
             return;
         }
         
-        // Check stock limit
-        if (item.stock !== null && newQuantity > item.stock) {
-            showNotification(`Only ${item.stock} items available in stock`, 'warning');
+        if (change > 0 && item.stock !== null && newQuantity > item.stock) {
+            showNotification(`Only ${item.stock} available`, 'warning');
             return;
         }
         
-        updatedItems[index].quantity = newQuantity;
+        item.quantity = newQuantity;
         setOrderItems(updatedItems);
     };
 
-    // Remove item from order
     const removeItem = (index) => {
         const itemName = orderItems[index].name;
         const updatedItems = orderItems.filter((_, i) => i !== index);
         setOrderItems(updatedItems);
-        showNotification(`${itemName} removed from order`, 'info');
+        showNotification(`${itemName} removed`, 'info');
     };
 
-    // Clear entire order
     const clearOrder = () => {
-        if (orderItems.length > 0 && window.confirm('Clear the entire order?')) {
-            resetOrder();
+        if (orderItems.length === 0) return;
+        if (window.confirm('Clear entire order?')) {
+            setOrderItems([]);
+            setCustomerInfo({ name: '', phone: '', address: '', notes: '' });
+            setHotelInfo({ guestName: '', roomNumber: '' });
+            setPeopleCount(1);
+            setCardsPresented(0);
+            setModalIsEmployee(false);
+            setDiscount({ type: 'none', value: 0 });
+            setItemNotes({});
+            showNotification('Order cleared', 'info');
         }
     };
 
-    // ✅ FIXED: Place order with success popup and reset
-    const placeOrder = async () => {
+    // ============ MODAL HANDLERS ============
+    const openPaymentModal = () => {
         if (orderItems.length === 0) {
-            showNotification('Please add items to the order first', 'error');
+            showNotification('Add items first', 'error');
             return;
         }
 
-        // Check for unavailable items
-        const unavailableItems = orderItems.filter(item => item.is_available === false);
-        if (unavailableItems.length > 0) {
-            showNotification(`${unavailableItems.length} items are no longer available. Please remove them.`, 'error');
+        for (const cartItem of orderItems) {
+            let currentStock = null;
+            for (const category of categories) {
+                const found = category.items?.find(i => i.id === cartItem.id);
+                if (found) {
+                    currentStock = found.stock_quantity;
+                    break;
+                }
+            }
+            
+            if (currentStock !== null && currentStock !== undefined) {
+                if (cartItem.quantity > currentStock) {
+                    showNotification(`Stock changed for ${cartItem.name}. Only ${currentStock} available.`, 'error');
+                    const updatedItems = orderItems.map(item => 
+                        item.id === cartItem.id ? { ...item, stock: currentStock } : item
+                    );
+                    setOrderItems(updatedItems);
+                    return;
+                }
+            }
+        }
+
+        setModalPeopleCount(peopleCount);
+        setModalCardsPresented(cardsPresented);
+        setModalIsEmployee(false);
+        setSelectedPaymentMethod(null);
+        setCashAmount('');
+        setHotelInfo({ guestName: '', roomNumber: '' });
+        setShowPaymentModal(true);
+    };
+
+    const openDiscountModal = () => {
+        setShowDiscountModal(true);
+    };
+
+    // ============ ORDER SUBMISSION ============
+    const handlePlaceOrder = () => {
+        if (!selectedPaymentMethod) {
+            showNotification('Select payment method', 'error');
             return;
+        }
+
+        if (selectedPaymentMethod.name === 'Cash' && (!cashAmount || Number(cashAmount) < modalTotals.total)) {
+            showNotification('Invalid cash amount', 'error');
+            return;
+        }
+
+        if (selectedPaymentMethod.name === 'Hotel' && (!hotelInfo.guestName || !hotelInfo.roomNumber)) {
+            showNotification('Enter guest name and room number', 'error');
+            return;
+        }
+
+        for (const cartItem of orderItems) {
+            let currentStock = null;
+            for (const category of categories) {
+                const found = category.items?.find(i => i.id === cartItem.id);
+                if (found) {
+                    currentStock = found.stock_quantity;
+                    break;
+                }
+            }
+            
+            if (currentStock !== null && currentStock !== undefined && cartItem.quantity > currentStock) {
+                showNotification(`Insufficient stock for ${cartItem.name}`, 'error');
+                setShowPaymentModal(false);
+                return;
+            }
         }
 
         setIsLoading(true);
+        setShowPaymentModal(false);
 
+        let finalCustomerName = customerInfo.name;
+        let roomNumber = null;
+        
+        if (selectedPaymentMethod.name === 'Hotel') {
+            finalCustomerName = `[HOTEL] ${hotelInfo.guestName}`;
+            roomNumber = hotelInfo.roomNumber;
+        } else if (orderType === 'delivery' && customerInfo.name) {
+            finalCustomerName = customerInfo.name;
+        }
+
+        // Calculate final totals with all discounts and service charge
+        const finalTotals = calculateTotals(
+            modalPeopleCount, 
+            modalCardsPresented, 
+            discount.type, 
+            discount.value, 
+            modalIsEmployee, 
+            orderItems, 
+            selectedPaymentMethod
+        );
+
+        const orderData = {
+            items: orderItems.map(item => ({
+                id: item.id,
+                name: item.name,
+                price: Number(item.price),
+                quantity: item.quantity,
+                notes: item.notes || null
+            })),
+            order_type: orderType,
+            customer_name: finalCustomerName || null,
+            room_number: roomNumber,
+            customer_phone: customerInfo.phone || null,
+            customer_address: customerInfo.address || null,
+            notes: customerInfo.notes || null,
+            people_count: modalPeopleCount,
+            cards_presented: modalCardsPresented,
+            discount_type: discount.type,
+            discount_value: discount.value,
+            is_employee: modalIsEmployee ? 1 : 0,
+            employee_discount_amount: finalTotals.employeeDiscount,
+            service_charge: finalTotals.serviceCharge,
+            payment_method_id: selectedPaymentMethod.id,
+            subtotal: finalTotals.subtotal,
+            total_amount: finalTotals.total
+        };
+
+        // FORCE ROOM NUMBER TO BE INCLUDED
+        console.log('SENDING ROOM NUMBER:', roomNumber);
+        console.log('ORDER DATA:', orderData);
+
+        router.post('/cashier/pos/orders', orderData, {
+            onSuccess: (response) => {
+                // Format order number for display
+                const orderId = response.props.flash?.order_data?.order_id || Date.now();
+                const formattedOrderNumber = `ORD-${String(orderId).padStart(5, '0')}`;
+                
+                const successData = {
+                    orderId: formattedOrderNumber,
+                    total: finalTotals.total,
+                    itemsCount: orderItems.length,
+                    customerName: finalCustomerName || 'Walk-in',
+                    orderType: orderType,
+                    paymentMethod: selectedPaymentMethod.name,
+                    hasEmployeeDiscount: modalIsEmployee,
+                    hasServiceCharge: selectedPaymentMethod.name === 'Hotel',
+                    roomNumber: roomNumber
+                };
+                
+                showSuccessOrder(successData);
+                setOrderItems([]);
+                setCustomerInfo({ name: '', phone: '', address: '', notes: '' });
+                setHotelInfo({ guestName: '', roomNumber: '' });
+                setPeopleCount(1);
+                setCardsPresented(0);
+                setModalIsEmployee(false);
+                setDiscount({ type: 'none', value: 0 });
+                setItemNotes({});
+                setIsLoading(false);
+                
+                setLastMenuUpdate(Date.now());
+                setLastOrderUpdate(Date.now());
+            },
+            onError: (errors) => {
+                console.error('Order error:', errors);
+                showNotification('Failed to place order', 'error');
+                setIsLoading(false);
+                setShowPaymentModal(true);
+            }
+        });
+    };
+
+    // ============ ORDER COMPLETION ============
+    const completeOrder = (orderId) => {
+        if (!window.confirm('Complete this order?')) return;
+        
+        setProcessingOrder(orderId);
+        
+        fetch(`/admin/orders/${orderId}/complete`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
+                'Accept': 'application/json',
+            },
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                showNotification(data.message || `Order #${orderId} completed`, 'success');
+                setPendingOrders(prev => prev.filter(order => order.id !== orderId));
+                // Remove from notifications if it was there
+                setReadyOrderNotifications(prev => prev.filter(n => n.id !== orderId));
+                setLastOrderUpdate(Date.now());
+            } else {
+                showNotification(data.error || 'Failed to complete order', 'error');
+            }
+            setProcessingOrder(null);
+        })
+        .catch(error => {
+            console.error('Complete order error:', error);
+            showNotification('Failed to complete order', 'error');
+            setProcessingOrder(null);
+        });
+    };
+
+    // ============ MANUAL REFRESH ============
+    const refreshAllData = async () => {
+        setIsLoading(true);
         try {
-            const response = await router.post('/admin/pos/orders', {
-                items: orderItems.map(item => ({
-                    id: item.id,
-                    name: item.name,
-                    price: Number(item.price),
-                    quantity: item.quantity
-                })),
-                order_type: orderType,
-                table_id: selectedTable,
-                customer_name: customerInfo.name,
-                customer_phone: customerInfo.phone,
-                customer_address: customerInfo.address,
-                notes: customerInfo.notes,
-                people_count: peopleCount,
-                cards_presented: cardsPresented,
-                discount_type: discount.type,
-                discount_value: discount.value
-            });
-
-            // ✅ FIXED: Show success popup with order details
-            const successData = {
-                orderId: response?.props?.order?.id || `#${Math.floor(Math.random() * 1000)}`,
-                total: total,
-                itemsCount: orderItems.length,
-                customerName: customerInfo.name || 'Walk-in Customer',
-                orderType: orderType
-            };
+            const [menuRes, orderRes] = await Promise.all([
+                fetch('/cashier/pos/menu-data', {
+                    headers: { 'Cache-Control': 'no-cache' }
+                }),
+                fetch('/cashier/pos/order-data', {
+                    headers: { 'Cache-Control': 'no-cache' }
+                })
+            ]);
             
-            // Show success popup
-            showSuccessOrder(successData);
+            const menuData = await menuRes.json();
+            const orderData = await orderRes.json();
             
-            // ✅ FIXED: Reset the order after successful placement
-            resetOrder();
+            if (menuData.success) setCategories(menuData.categories);
+            if (orderData.success) {
+                // Format order numbers
+                const formattedOrders = orderData.pending_orders.map(order => ({
+                    ...order,
+                    display_order_number: `ORD-${String(order.id).padStart(5, '0')}`
+                }));
+                setPendingOrders(formattedOrders);
+            }
             
-            // Update pending orders list
-            checkForOrderUpdates();
-
+            setLastUpdate(new Date());
+            setLastMenuUpdate(Date.now());
+            setLastOrderUpdate(Date.now());
+            showNotification('Data refreshed', 'success');
         } catch (error) {
-            console.error('Order placement error:', error);
-            showNotification('Error placing order. Please try again.', 'error');
+            showNotification('Refresh failed', 'error');
         } finally {
             setIsLoading(false);
         }
     };
 
-    // Mark order as paid
-    const markAsPaid = async (orderId) => {
-        if (window.confirm('Mark this order as paid?')) {
-            setProcessingOrder(orderId);
-            try {
-                await router.post(`/admin/orders/${orderId}/pay`, {
-                    payment_method_id: 1
-                });
-                
-                // Remove from pending orders immediately
-                setPendingOrders(prev => prev.filter(order => order.id !== orderId));
-                showNotification(`Order #${orderId} marked as paid`, 'success');
-                
-            } catch (error) {
-                showNotification('Error processing payment', 'error');
-                console.error('Payment error:', error);
-            } finally {
-                setProcessingOrder(null);
-            }
-        }
-    };
-
-    // Handle back button
-    const handleBack = () => {
-        const userRole = auth.user?.role;
-        const roleRoutes = {
-            'admin': '/admin/dashboard',
-            'resto': '/cashier/pos',
-            'resto_admin': '/cashier/dashboard',
-            'kitchen': '/kitchen',
-            'customer': '/menu'
-        };
-        
-        const redirectTo = roleRoutes[userRole] || '/';
-        router.visit(redirectTo);
-    };
-
-    // Connection status badge
-    const ConnectionStatusBadge = () => {
-        const getStatusInfo = () => {
-            switch(connectionStatus) {
-                case 'connected':
-                    return { text: 'Live', icon: Wifi, color: 'bg-emerald-500', textColor: 'text-emerald-500' };
-                case 'disconnected':
-                    return { text: 'Offline', icon: WifiOff, color: 'bg-red-500', textColor: 'text-red-500' };
-                default:
-                    return { text: 'Connected', icon: Wifi, color: 'bg-emerald-500', textColor: 'text-emerald-500' };
-            }
-        };
-
-        const status = getStatusInfo();
-        const Icon = status.icon;
-
-        return (
-            <div className="flex items-center gap-2">
-                <div className="flex items-center gap-1 px-2 py-1 rounded-md bg-gray-100">
-                    <Icon className={`w-3 h-3 ${status.textColor}`} />
-                    <span className={`text-xs font-medium ${status.textColor}`}>
-                        {status.text}
-                    </span>
-                </div>
-                <span className="text-xs text-gray-500">
-                    Updated: {lastUpdate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+    // ============ UI COMPONENTS ============
+    const ConnectionStatusBadge = () => (
+        <div className="flex items-center gap-3">
+            <div className={`flex items-center gap-1 px-2 py-1 rounded-md ${connectionStatus === 'connected' ? 'bg-emerald-100' : 'bg-red-100'}`}>
+                {connectionStatus === 'connected' ? (
+                    <Wifi className="w-3 h-3 text-emerald-600" />
+                ) : (
+                    <WifiOff className="w-3 h-3 text-red-600" />
+                )}
+                <span className={`text-xs font-medium ${connectionStatus === 'connected' ? 'text-emerald-600' : 'text-red-600'}`}>
+                    {connectionStatus === 'connected' ? 'Live' : 'Offline'}
                 </span>
+            </div>
+            
+            <span className="text-xs text-gray-400">
+                {lastUpdate.toLocaleTimeString('en-PH', { timeZone: 'Asia/Manila' })}
+            </span>
+        </div>
+    );
+
+    // Ready Order Notifications Component
+    const ReadyOrderNotifications = () => {
+        if (readyOrderNotifications.length === 0) return null;
+        
+        return (
+            <div className="fixed top-4 right-4 z-50 space-y-3 max-w-md">
+                {readyOrderNotifications.map((notification, index) => (
+                    <div 
+                        key={notification.id} 
+                        className="bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-xl shadow-2xl p-5 animate-slide-in border-l-8 border-yellow-300"
+                        style={{ animationDelay: `${index * 100}ms` }}
+                    >
+                        <div className="flex items-start gap-4">
+                            <div className="p-3 bg-white/20 rounded-full">
+                                <ChefHat className="w-8 h-8" />
+                            </div>
+                            <div className="flex-1">
+                                <div className="flex justify-between items-start mb-3">
+                                    <div>
+                                        <h3 className="font-bold text-xl">🍳 Order Ready!</h3>
+                                        <p className="text-green-100 text-sm mt-1">Kitchen has completed preparation</p>
+                                    </div>
+                                    <button 
+                                        onClick={() => dismissReadyNotification(notification.id)}
+                                        className="p-2 hover:bg-white/20 rounded-lg transition-colors"
+                                    >
+                                        <X className="w-5 h-5" />
+                                    </button>
+                                </div>
+                                
+                                <div className="bg-white/10 rounded-lg p-4 mb-4">
+                                    <div className="flex justify-between items-center mb-2">
+                                        <span className="text-sm opacity-90">Order Number</span>
+                                        <span className="font-mono font-bold text-lg">{notification.orderNumber}</span>
+                                    </div>
+                                    <div className="flex justify-between items-center">
+                                        <span className="text-sm opacity-90">Customer</span>
+                                        <span className="font-semibold">{notification.customerName}</span>
+                                    </div>
+                                    {notification.isHotel && (
+                                        <div className="mt-2 flex items-center gap-1 text-yellow-200 text-xs">
+                                            <Building2 className="w-3 h-3" />
+                                            <span>Hotel Order</span>
+                                            {notification.roomNumber && (
+                                                <span className="ml-1">- Room {notification.roomNumber}</span>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                                
+                                <div className="flex gap-3">
+                                    <button
+                                        onClick={() => {
+                                            completeOrder(notification.id);
+                                            dismissReadyNotification(notification.id);
+                                        }}
+                                        className="flex-1 py-3 bg-white text-green-700 rounded-lg font-bold hover:bg-green-50 transition-colors flex items-center justify-center gap-2 shadow-lg"
+                                    >
+                                        <CheckCircle className="w-5 h-5" />
+                                        MARK COMPLETED
+                                    </button>
+                                    <button
+                                        onClick={() => dismissReadyNotification(notification.id)}
+                                        className="px-4 py-3 bg-white/20 hover:bg-white/30 rounded-lg transition-colors"
+                                    >
+                                        Later
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                ))}
+                
+                {readyOrderNotifications.length > 1 && (
+                    <button
+                        onClick={dismissAllNotifications}
+                        className="w-full py-2 bg-gray-800 text-white rounded-lg hover:bg-gray-900 transition-colors text-sm font-medium"
+                    >
+                        Dismiss All ({readyOrderNotifications.length})
+                    </button>
+                )}
             </div>
         );
     };
 
-    // Success Order Popup Component
+    // Success Order Popup - at top right
     const SuccessOrderPopup = () => {
         if (!successOrder) return null;
-
         return (
-            <div className="fixed top-4 right-4 z-50 animate-slide-in">
-                <div className="bg-gradient-to-r from-emerald-500 to-green-500 text-white rounded-xl shadow-xl p-4 max-w-sm">
+            <div className="fixed top-4 right-4 z-50 animate-slide-in max-w-sm">
+                <div className="bg-gradient-to-r from-emerald-500 to-green-500 text-white rounded-xl shadow-xl p-4">
                     <div className="flex items-start gap-3">
-                        <div className="p-2 bg-white/20 rounded-lg">
+                        <div className="p-2 bg-white/20 rounded-lg flex-shrink-0">
                             <CheckCircle className="w-6 h-6" />
                         </div>
-                        <div className="flex-1">
+                        <div className="flex-1 min-w-0">
                             <div className="flex justify-between items-start mb-2">
-                                <h3 className="font-bold text-lg">Order Placed Successfully!</h3>
-                                <button 
-                                    onClick={() => setSuccessOrder(null)}
-                                    className="text-white/80 hover:text-white ml-2"
-                                    aria-label="Close success message"
-                                >
+                                <h3 className="font-bold text-lg truncate">Order Placed!</h3>
+                                <button onClick={() => setSuccessOrder(null)} className="text-white/80 hover:text-white ml-2 flex-shrink-0">
                                     <X className="w-4 h-4" />
                                 </button>
                             </div>
-                            
-                            <div className="space-y-2 text-sm">
+                            <div className="space-y-1 text-sm">
                                 <div className="flex justify-between">
-                                    <span className="text-emerald-100">Order Number:</span>
-                                    <span className="font-bold">#{successOrder.orderId}</span>
+                                    <span>Order:</span>
+                                    <span className="font-bold">{successOrder.orderId}</span>
                                 </div>
                                 <div className="flex justify-between">
-                                    <span className="text-emerald-100">Customer:</span>
-                                    <span>{successOrder.customerName}</span>
+                                    <span>Payment:</span>
+                                    <span>{successOrder.paymentMethod}</span>
                                 </div>
-                                <div className="flex justify-between">
-                                    <span className="text-emerald-100">Order Type:</span>
-                                    <span className="capitalize">{successOrder.orderType.replace('_', ' ')}</span>
-                                </div>
-                                <div className="flex justify-between">
-                                    <span className="text-emerald-100">Items:</span>
-                                    <span>{successOrder.itemsCount} items</span>
-                                </div>
+                                {successOrder.hasEmployeeDiscount && (
+                                    <div className="flex justify-between text-yellow-200">
+                                        <span>Employee Discount</span>
+                                        <span>✓</span>
+                                    </div>
+                                )}
+                                {successOrder.hasServiceCharge && (
+                                    <div className="flex justify-between text-yellow-200">
+                                        <span>Hotel Service Charge</span>
+                                        <span>✓</span>
+                                    </div>
+                                )}
+                                {successOrder.roomNumber && (
+                                    <div className="flex justify-between text-yellow-200">
+                                        <span>Room</span>
+                                        <span>{successOrder.roomNumber}</span>
+                                    </div>
+                                )}
                                 <div className="flex justify-between text-base font-bold pt-2 border-t border-white/20">
-                                    <span>Total Amount:</span>
+                                    <span>Total:</span>
                                     <span>₱{formatPrice(successOrder.total)}</span>
                                 </div>
-                            </div>
-                            
-                            <div className="mt-4 flex gap-2">
-                                <button 
-                                    onClick={() => {
-                                        // Option: Print receipt
-                                        window.print();
-                                        setSuccessOrder(null);
-                                    }}
-                                    className="flex-1 py-2 bg-white/20 hover:bg-white/30 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-1"
-                                >
-                                    <Printer className="w-3 h-3" />
-                                    Print Receipt
-                                </button>
-                                <button 
-                                    onClick={() => setSuccessOrder(null)}
-                                    className="flex-1 py-2 bg-white text-emerald-600 hover:bg-emerald-50 rounded-lg text-sm font-bold transition-colors"
-                                >
-                                    Continue
-                                </button>
                             </div>
                         </div>
                     </div>
@@ -620,845 +1105,754 @@ export default function POS({
         );
     };
 
+    // Get status badge based on order status and kitchen items
+    const getOrderStatusBadge = (order) => {
+        if (order.status === 'completed') {
+            return { text: 'Completed', color: 'bg-green-100 text-green-800', icon: CheckCircle };
+        }
+        if (order.status === 'ready') {
+            return { text: 'Ready', color: 'bg-emerald-100 text-emerald-800', icon: Check };
+        }
+        if (order.status === 'preparing') {
+            return { text: 'Preparing', color: 'bg-blue-100 text-blue-800', icon: Flame };
+        }
+        if (order.has_kitchen_items === true) {
+            return { text: 'In Kitchen', color: 'bg-amber-100 text-amber-800', icon: ChefHat };
+        }
+        return { text: 'Pending', color: 'bg-yellow-100 text-yellow-800', icon: Hourglass };
+    };
+
+    // Check if order can be completed
+    const canCompleteOrder = (order) => {
+        if (order.has_kitchen_items === false) return true;
+        return order.status === 'ready';
+    };
+
+    // Get button text for order
+    const getOrderButton = (order) => {
+        if (order.has_kitchen_items === false) {
+            return { text: 'Complete', color: 'bg-green-500 hover:bg-green-600', icon: CheckCircle };
+        }
+        
+        switch(order.status) {
+            case 'pending':
+                return { text: 'In Kitchen', color: 'bg-amber-500 cursor-not-allowed', icon: ChefHat, disabled: true };
+            case 'preparing':
+                return { text: 'Preparing', color: 'bg-blue-500 cursor-not-allowed', icon: Flame, disabled: true };
+            case 'ready':
+                return { text: 'Complete', color: 'bg-green-500 hover:bg-green-600', icon: CheckCircle };
+            default:
+                return { text: 'Complete', color: 'bg-green-500 hover:bg-green-600', icon: CheckCircle };
+        }
+    };
+
+    // Check if order is hotel order by looking at customer name or payment method
+    const isHotelOrder = (order) => {
+        return order.customer_name?.includes('[HOTEL]') || order.payment_method_name === 'Hotel';
+    };
+
+    // Filter pending orders
+    const filteredPendingOrders = pendingOrders.filter(order => 
+        order.status !== 'completed' && order.status !== 'cancelled'
+    );
+
     return (
         <>
-            <Head title="POS System - Live" />
+            <Head title="POS System" />
 
-            {/* Notification Toast */}
+            {/* Ready Order Notifications */}
+            <ReadyOrderNotifications />
+
+            {/* Success Order Popup - TOP RIGHT */}
+            <SuccessOrderPopup />
+
+            {/* Regular Notifications */}
             {notification && (
-                <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-xl shadow-lg flex items-center space-x-3 animate-slide-in ${notification.type === 'success' 
-                        ? 'bg-gradient-to-r from-emerald-500 to-green-500 text-white' 
-                        : notification.type === 'error' 
-                        ? 'bg-gradient-to-r from-red-500 to-rose-500 text-white'
-                        : notification.type === 'warning'
-                        ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white'
-                        : 'bg-gradient-to-r from-blue-500 to-cyan-500 text-white'
-                    }`}>
-                    {notification.type === 'success' ? (
-                        <CheckCircle className="w-5 h-5" />
-                    ) : notification.type === 'error' ? (
-                        <AlertCircle className="w-5 h-5" />
-                    ) : (
-                        <Bell className="w-5 h-5" />
-                    )}
+                <div className={`fixed top-20 right-4 z-50 px-4 py-3 rounded-xl shadow-lg flex items-center gap-3 animate-slide-in ${
+                    notification.type === 'success' ? 'bg-emerald-500' :
+                    notification.type === 'error' ? 'bg-red-500' : 'bg-amber-500'
+                } text-white`}>
+                    {notification.type === 'success' ? <CheckCircle className="w-5 h-5" /> :
+                     notification.type === 'error' ? <AlertCircle className="w-5 h-5" /> :
+                     <Bell className="w-5 h-5" />}
                     <span className="font-medium">{notification.message}</span>
-                    <button 
-                        onClick={() => setNotification(null)} 
-                        className="ml-4 hover:opacity-80"
-                        aria-label="Close notification"
-                    >
+                    <button onClick={() => setNotification(null)} className="ml-auto hover:opacity-80">
                         <X className="w-4 h-4" />
                     </button>
                 </div>
             )}
 
-            {/* ✅ FIXED: Success Order Popup */}
-            <SuccessOrderPopup />
-
-            <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+            {/* Main Container */}
+            <div className="h-screen bg-gray-100 flex flex-col">
                 {/* Header */}
-                <div className="bg-white shadow-sm border-b border-gray-200">
-                    <div className="container mx-auto px-2 sm:px-4 py-3">
-                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-                            <div className="flex items-center space-x-3">
-                                <button 
-                                    onClick={handleBack}
-                                    className="p-2 hover:bg-gray-100 rounded-xl transition-colors"
-                                    aria-label="Go back"
-                                >
-                                    <ArrowLeft className="w-5 h-5 text-gray-600" />
-                                </button>
-                                <div className="p-2 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-2xl shadow-lg">
-                                    <ShoppingCart className="w-6 h-6 text-white" />
-                                </div>
-                                <div className="flex flex-col">
-                                    <h1 className="text-lg sm:text-xl font-bold text-gray-900">Live POS System</h1>
-                                    <div className="flex flex-wrap items-center gap-1 sm:gap-2 text-xs sm:text-sm text-gray-600">
-                                        <span>{appName}</span>
-                                        <span className="hidden sm:inline">•</span>
-                                        <span>Welcome, {auth.user?.name}</span>
-                                    </div>
-                                </div>
+                <div className="bg-white border-b border-gray-200 px-6 py-3 flex-shrink-0">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-4">
+                            <button onClick={() => router.visit('/admin/dashboard')} className="p-2 hover:bg-gray-100 rounded-lg">
+                                <ArrowLeft className="w-5 h-5 text-gray-600" />
+                            </button>
+                            <div>
+                                <h1 className="text-xl font-bold text-gray-900">CJ BREW & DINE</h1>
+                                <p className="text-sm text-gray-500">{currentDate} {currentTime}</p>
                             </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                            <ConnectionStatusBadge />
                             
-                            <div className="flex flex-wrap items-center gap-2">
-                                <div className="flex items-center gap-2">
-                                    <ConnectionStatusBadge />
-                                    <button
-                                        onClick={() => setShowOnlyAvailable(!showOnlyAvailable)}
-                                        className={`px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg font-medium flex items-center space-x-1 sm:space-x-2 ${showOnlyAvailable 
-                                            ? 'bg-emerald-100 text-emerald-700' 
-                                            : 'bg-gray-100 text-gray-700'}`}
-                                        aria-label={showOnlyAvailable ? "Show all items" : "Show available only"}
-                                    >
-                                        {showOnlyAvailable ? (
-                                            <>
-                                                <Eye className="w-3 h-3 sm:w-4 sm:h-4" />
-                                                <span className="text-xs sm:text-sm">Available</span>
-                                            </>
-                                        ) : (
-                                            <>
-                                                <EyeOff className="w-3 h-3 sm:w-4 sm:h-4" />
-                                                <span className="text-xs sm:text-sm">All</span>
-                                            </>
-                                        )}
-                                    </button>
-                                    <button 
-                                        onClick={refreshAllData}
-                                        disabled={isLoading}
-                                        className="px-2 sm:px-3 py-1.5 sm:py-2 bg-blue-100 text-blue-700 rounded-lg font-medium hover:bg-blue-200 flex items-center space-x-1 sm:space-x-2 disabled:opacity-50 text-xs sm:text-sm"
-                                        aria-label="Refresh data"
-                                    >
-                                        <RefreshCw className={`w-3 h-3 sm:w-4 sm:h-4 ${isLoading ? 'animate-spin' : ''}`} />
-                                        <span>Refresh</span>
-                                    </button>
-                                </div>
-                            </div>
+                            <button 
+                                onClick={refreshAllData} 
+                                disabled={isLoading} 
+                                className="px-3 py-2 bg-blue-100 text-blue-700 rounded-lg font-medium hover:bg-blue-200 disabled:opacity-50 flex items-center gap-2">
+                                <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+                                <span className="text-sm">Refresh</span>
+                            </button>
+                            <button
+                                onClick={() => setShowPendingOrders(!showPendingOrders)}
+                                className="px-3 py-2 bg-amber-100 text-amber-700 rounded-lg font-medium hover:bg-amber-200 flex items-center gap-2">
+                                <Clock className="w-4 h-4" />
+                                <span>Pending ({filteredPendingOrders.length})</span>
+                                {showPendingOrders ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+                            </button>
                         </div>
                     </div>
                 </div>
 
-                {/* 🍽️ TABLET-FRIENDLY LAYOUT - ORDER PANEL ALWAYS ON RIGHT */}
-                <div className="container mx-auto px-2 sm:px-4 py-4">
-                    {/* ✅ FIXED: On tablets (768px+), keep order panel on right side */}
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        {/* 🟦 LEFT COLUMN - MENU (2/3 width on tablet & desktop) */}
-                        <div className="md:col-span-2">
-                            <div className="bg-white rounded-xl sm:rounded-2xl shadow-lg border border-gray-200">
-                                {/* Menu Header */}
-                                <div className="bg-gradient-to-r from-gray-50 to-white p-4 border-b border-gray-200">
-                                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                                        <div className="flex items-center space-x-3">
-                                            <div className="p-2 bg-gradient-to-r from-blue-100 to-indigo-100 rounded-lg">
-                                                <ChefHat className="w-5 h-5 text-blue-600" />
-                                            </div>
-                                            <div>
-                                                <h2 className="text-lg sm:text-xl font-bold text-gray-900">Live Menu</h2>
-                                                <p className="text-xs sm:text-sm text-gray-600">Updates automatically every 2 seconds</p>
-                                            </div>
-                                        </div>
-                                        <div className="flex items-center space-x-2">
-                                            <div className="relative flex-1 sm:flex-none">
-                                                {/* ✅ FIXED: Proper label association */}
-                                                <label htmlFor="searchItems" className="sr-only">Search items</label>
-                                                <div className="relative">
-                                                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
-                                                    <input
-                                                        type="text"
-                                                        id="searchItems"
-                                                        name="searchItems"
-                                                        value={searchQuery}
-                                                        onChange={(e) => setSearchQuery(e.target.value)}
-                                                        placeholder="Search items..."
-                                                        className="w-full sm:w-48 pl-9 pr-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                                                        autoComplete="off"
-                                                    />
-                                                </div>
-                                            </div>
-                                            <div className="flex border border-gray-300 rounded-lg overflow-hidden">
-                                                <button
-                                                    onClick={() => setViewMode('grid')}
-                                                    className={`p-2 ${viewMode === 'grid' ? 'bg-blue-100 text-blue-600' : 'text-gray-600'}`}
-                                                    aria-label="Grid view"
-                                                >
-                                                    <Grid className="w-4 h-4" />
-                                                </button>
-                                                <button
-                                                    onClick={() => setViewMode('list')}
-                                                    className={`p-2 ${viewMode === 'list' ? 'bg-blue-100 text-blue-600' : 'text-gray-600'}`}
-                                                    aria-label="List view"
-                                                >
-                                                    <List className="w-4 h-4" />
-                                                </button>
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    {/* Category Tabs - Horizontal Scroll on Mobile */}
-                                    <div className="mt-3">
-                                        <div className="flex space-x-2 overflow-x-auto pb-1 scrollbar-thin">
-                                            <button
-                                                onClick={() => setActiveCategory('all')}
-                                                className={`px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg font-medium whitespace-nowrap flex-shrink-0 flex items-center space-x-2 ${activeCategory === 'all'
-                                                        ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow'
-                                                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                                                    }`}
-                                            >
-                                                <Sparkles className="w-3 h-3 sm:w-4 sm:h-4" />
-                                                <span className="text-xs sm:text-sm">All Items</span>
-                                                <span className="px-1.5 py-0.5 text-xs bg-white/20 rounded-full">
-                                                    {categories.flatMap(cat => cat.items || []).length}
-                                                </span>
-                                            </button>
-                                            {categories.map(category => {
-                                                const Icon = categoryIcons[category.name] || ChefHat;
-                                                const itemCount = category.items?.length || 0;
-                                                return (
-                                                    <button
-                                                        key={category.id}
-                                                        onClick={() => setActiveCategory(category.id.toString())}
-                                                        className={`px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg font-medium whitespace-nowrap flex items-center space-x-2 flex-shrink-0 ${activeCategory === category.id.toString()
-                                                                ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow'
-                                                                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                                                            }`}
-                                                    >
-                                                        <Icon className="w-3 h-3 sm:w-4 sm:h-4" />
-                                                        <span className="text-xs sm:text-sm">{category.name}</span>
-                                                        <span className="px-1.5 py-0.5 text-xs bg-white/20 rounded-full">
-                                                            {itemCount}
-                                                        </span>
-                                                    </button>
-                                                );
-                                            })}
-                                        </div>
-                                    </div>
-                                </div>
-
-                                {/* ✅ FIXED: 3x3 Menu Items Grid for Tablets */}
-                                <div className="h-[calc(100vh-280px)] sm:h-[calc(100vh-300px)] overflow-y-auto">
-                                    <div className="p-3 sm:p-4">
-                                        {viewMode === 'grid' ? (
-                                            // ✅ ENHANCED: 3 columns on tablets (768px+), 4 on desktop
-                                            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2 sm:gap-3">
-                                                {filteredItems.map(item => {
-                                                    const CategoryIcon = categoryIcons[categories.find(c => c.id === item.category_id)?.name] || ChefHat;
-                                                    const isUnavailable = item.is_available === false;
-                                                    const isLowStock = item.stock !== null && item.stock <= 5;
-                                                    
-                                                    return (
-                                                        <button
-                                                            key={item.id}
-                                                            onClick={() => !isUnavailable && addToOrder(item)}
-                                                            disabled={isUnavailable}
-                                                            className={`bg-white border rounded-lg sm:rounded-xl p-2 sm:p-3 transition-all duration-200 text-left flex flex-col h-full group min-h-[160px] sm:min-h-[180px]
-                                                                ${isUnavailable 
-                                                                    ? 'border-red-200 bg-red-50 opacity-60 cursor-not-allowed' 
-                                                                    : 'border-gray-200 hover:border-blue-500 hover:shadow-lg active:scale-[0.98]'
-                                                                }`}
-                                                        >
-                                                            {/* Image/Icon - Optimized for 3x3 grid */}
-                                                            <div className={`aspect-square w-full rounded-lg sm:rounded-xl mb-2 sm:mb-3 overflow-hidden flex-shrink-0 ${isUnavailable ? 'grayscale' : ''}`}>
-                                                                {item.image ? (
-                                                                    <img 
-                                                                        src={`/storage/${item.image}`}
-                                                                        alt={item.name}
-                                                                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                                                                        loading="lazy"
-                                                                    />
-                                                                ) : (
-                                                                    <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-50">
-                                                                        <CategoryIcon className="w-6 h-6 sm:w-8 sm:h-8 text-blue-400" />
-                                                                    </div>
-                                                                )}
-                                                            </div>
-                                                            
-                                                            {/* Item Name - Optimized for smaller cards */}
-                                                            <div className="flex-1 min-h-[40px]">
-                                                                <div className="flex justify-between items-start mb-1 gap-1">
-                                                                    <h3 className="font-semibold text-gray-900 text-xs sm:text-sm text-left leading-tight line-clamp-2">
-                                                                        {item.name}
-                                                                    </h3>
-                                                                    {(isUnavailable || isLowStock) && (
-                                                                        <div className="flex-shrink-0">
-                                                                            <AvailabilityBadge isAvailable={item.is_available} stock={item.stock} />
-                                                                        </div>
-                                                                    )}
-                                                                </div>
-                                                                {item.description && (
-                                                                    <p className="text-[10px] sm:text-xs text-gray-600 mb-1 sm:mb-2 line-clamp-2 leading-relaxed">
-                                                                        {item.description}
-                                                                    </p>
-                                                                )}
-                                                            </div>
-                                                            
-                                                            {/* Price & Category - Compact layout */}
-                                                            <div className="mt-auto pt-1 sm:pt-2 border-t border-gray-100">
-                                                                <div className="flex justify-between items-center">
-                                                                    <span className="text-[10px] sm:text-xs text-gray-600 flex items-center gap-1 truncate">
-                                                                        <CategoryIcon className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
-                                                                        <span className="truncate">
-                                                                            {categories.find(c => c.id === item.category_id)?.name}
-                                                                        </span>
-                                                                    </span>
-                                                                    <span className={`text-sm sm:text-base font-bold ${isUnavailable ? 'text-gray-400' : 'text-emerald-600'}`}>
-                                                                        ₱{formatPrice(item.price)}
-                                                                    </span>
-                                                                </div>
-                                                            </div>
-                                                        </button>
-                                                    );
-                                                })}
-                                            </div>
-                                        ) : (
-                                            // List View for Mobile
-                                            <div className="space-y-2">
-                                                {filteredItems.map(item => {
-                                                    const CategoryIcon = categoryIcons[categories.find(c => c.id === item.category_id)?.name] || ChefHat;
-                                                    const isUnavailable = item.is_available === false;
-                                                    
-                                                    return (
-                                                        <button
-                                                            key={item.id}
-                                                            onClick={() => !isUnavailable && addToOrder(item)}
-                                                            disabled={isUnavailable}
-                                                            className={`w-full bg-white border rounded-lg p-3 transition-all duration-200 text-left flex items-center gap-3 group
-                                                                ${isUnavailable 
-                                                                    ? 'border-red-200 bg-red-50 opacity-60 cursor-not-allowed' 
-                                                                    : 'border-gray-200 hover:border-blue-500 hover:shadow-md active:scale-[0.98]'
-                                                                }`}
-                                                        >
-                                                            {/* Icon */}
-                                                            <div className="flex-shrink-0">
-                                                                <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${isUnavailable ? 'bg-red-100' : 'bg-blue-100'}`}>
-                                                                    <CategoryIcon className={`w-5 h-5 ${isUnavailable ? 'text-red-400' : 'text-blue-500'}`} />
-                                                                </div>
-                                                            </div>
-                                                            
-                                                            {/* Item Info */}
-                                                            <div className="flex-1 min-w-0">
-                                                                <div className="flex justify-between items-start mb-1 gap-2">
-                                                                    <h3 className="font-semibold text-gray-900 text-sm break-words">
-                                                                        {item.name}
-                                                                    </h3>
-                                                                    <AvailabilityBadge isAvailable={item.is_available} stock={item.stock} />
-                                                                </div>
-                                                                {item.description && (
-                                                                    <p className="text-xs text-gray-600 line-clamp-2">
-                                                                        {item.description}
-                                                                    </p>
-                                                                )}
-                                                            </div>
-                                                            
-                                                            {/* Price & Add Button */}
-                                                            <div className="flex items-center gap-3 flex-shrink-0">
-                                                                <span className={`text-base font-bold ${isUnavailable ? 'text-gray-400' : 'text-emerald-600'}`}>
-                                                                    ₱{formatPrice(item.price)}
-                                                                </span>
-                                                                {!isUnavailable && (
-                                                                    <div className="w-8 h-8 rounded-full bg-gradient-to-r from-blue-500 to-indigo-500 flex items-center justify-center text-white shadow group-active:scale-110 transition-transform">
-                                                                        <Plus className="w-4 h-4" />
-                                                                    </div>
-                                                                )}
-                                                            </div>
-                                                        </button>
-                                                    );
-                                                })}
-                                            </div>
-                                        )}
-                                        
-                                        {filteredItems.length === 0 && (
-                                            <div className="text-center py-8">
-                                                <div className="w-16 h-16 mx-auto mb-4 bg-gradient-to-r from-gray-200 to-gray-300 rounded-full flex items-center justify-center">
-                                                    <Search className="w-8 h-8 text-gray-400" />
-                                                </div>
-                                                <h3 className="text-lg font-semibold text-gray-700 mb-2">No items found</h3>
-                                                <p className="text-gray-500 mb-4">
-                                                    {searchQuery ? 'Try a different search term' : 'No items in this category'}
-                                                </p>
-                                                {searchQuery && (
-                                                    <button
-                                                        onClick={() => setSearchQuery('')}
-                                                        className="px-4 py-2 bg-gradient-to-r from-blue-500 to-indigo-500 text-white rounded-lg font-medium hover:opacity-90 text-sm"
-                                                    >
-                                                        Clear Search
-                                                    </button>
-                                                )}
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
-                            </div>
+                {/* Main Layout */}
+                <div className="flex-1 flex overflow-hidden">
+                    {/* Left Column - Current Order */}
+                    <div className="w-[30%] bg-white border-r border-gray-200 flex flex-col">
+                        <div className="p-4 border-b border-gray-200">
+                            <h2 className="text-lg font-bold text-gray-900">Current Order</h2>
                         </div>
 
-                        {/* 🟪 RIGHT COLUMN - ORDER PANEL (1/3 width on tablet & desktop) - ALWAYS ON RIGHT */}
-                        <div className="space-y-4">
-                            {/* Order Summary Card */}
-                            <div className="bg-white rounded-xl sm:rounded-2xl shadow-lg border border-gray-200">
-                                <div className="bg-gradient-to-r from-gray-800 to-gray-900 px-4 py-3">
-                                    <div className="flex items-center justify-between">
-                                        <div className="flex items-center space-x-2">
-                                            <div className="p-1.5 bg-white/10 rounded-lg">
-                                                <ShoppingCart className="w-4 h-4 text-white" />
-                                            </div>
-                                            <div>
-                                                <h2 className="text-lg font-bold text-white">Current Order</h2>
-                                                <p className="text-xs text-gray-300 capitalize">{orderType.replace('_', ' ')}</p>
-                                            </div>
-                                        </div>
-                                        <div className="flex items-center space-x-2">
-                                            <span className="px-2 py-1 bg-white/20 rounded-full text-xs font-medium text-white">
-                                                {orderItems.length} items
-                                            </span>
-                                        </div>
-                                    </div>
+                        {/* Order Items */}
+                        <div className="flex-1 overflow-y-auto p-4">
+                            {orderItems.length === 0 ? (
+                                <div className="text-center py-8">
+                                    <ShoppingCart className="w-12 h-12 text-gray-300 mx-auto mb-2" />
+                                    <p className="text-gray-500">No items in order</p>
                                 </div>
-
-                                {/* Order Controls */}
-                                <div className="p-4 border-b border-gray-200 space-y-4">
-                                    {/* Order Type Selection */}
-                                    <div>
-                                        <label className="block text-sm font-semibold text-gray-900 mb-2">Order Type</label>
-                                        <div className="grid grid-cols-3 gap-2">
-                                            {ORDER_TYPES.map(type => {
-                                                const Icon = type.icon;
-                                                return (
+                            ) : (
+                                <div className="space-y-4">
+                                    {orderItems.map((item, index) => (
+                                        <div key={index} className="border-b border-gray-100 pb-3">
+                                            <div className="flex justify-between items-start mb-2">
+                                                <h4 className="font-medium text-gray-900">{item.name}</h4>
+                                                <div className="flex gap-1">
                                                     <button
-                                                        key={type.value}
-                                                        onClick={() => setOrderType(type.value)}
-                                                        className={`py-2 rounded-lg flex flex-col items-center justify-center space-y-1 ${orderType === type.value
-                                                                ? `${type.color} text-white shadow`
-                                                                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                                                            }`}
+                                                        onClick={() => openNotesModal(index)}
+                                                        className="text-blue-500 hover:text-blue-600 p-1"
+                                                        title="Add note"
                                                     >
-                                                        <Icon className="w-4 h-4" />
-                                                        <span className="text-xs font-medium">{type.label}</span>
+                                                        <MessageSquare className="w-4 h-4" />
                                                     </button>
-                                                );
-                                            })}
-                                        </div>
-                                    </div>
-
-                                    {/* People & Cards */}
-                                    <div className="grid grid-cols-2 gap-3">
-                                        <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-lg p-3 border border-blue-100">
-                                            <div className="flex items-center justify-between mb-2">
-                                                <span className="text-xs font-semibold text-gray-900">People</span>
-                                                <Users className="w-4 h-4 text-blue-500" />
-                                            </div>
-                                            <div className="flex items-center justify-center space-x-3">
-                                                <button
-                                                    onClick={() => peopleCount > 1 && setPeopleCount(peopleCount - 1)}
-                                                    className="w-8 h-8 rounded-lg bg-white border border-gray-300 flex items-center justify-center hover:bg-gray-50 active:scale-95"
-                                                    aria-label="Decrease people count"
-                                                >
-                                                    <Minus className="w-3 h-3" />
-                                                </button>
-                                                <span className="text-xl font-bold text-gray-900 min-w-8 text-center">
-                                                    {peopleCount}
-                                                </span>
-                                                <button
-                                                    onClick={() => peopleCount < 20 && setPeopleCount(peopleCount + 1)}
-                                                    className="w-8 h-8 rounded-lg bg-white border border-gray-300 flex items-center justify-center hover:bg-gray-50 active:scale-95"
-                                                    aria-label="Increase people count"
-                                                >
-                                                    <Plus className="w-3 h-3" />
-                                                </button>
-                                            </div>
-                                        </div>
-                                        
-                                        <div className="bg-gradient-to-br from-emerald-50 to-green-50 rounded-lg p-3 border border-emerald-100">
-                                            <div className="flex items-center justify-between mb-2">
-                                                <span className="text-xs font-semibold text-gray-900">Cards</span>
-                                                <Tag className="w-4 h-4 text-emerald-500" />
-                                            </div>
-                                            <div className="flex items-center justify-center space-x-3">
-                                                <button
-                                                    onClick={() => cardsPresented > 0 && setCardsPresented(cardsPresented - 1)}
-                                                    className="w-8 h-8 rounded-lg bg-white border border-gray-300 flex items-center justify-center hover:bg-gray-50 active:scale-95"
-                                                    aria-label="Decrease card count"
-                                                >
-                                                    <Minus className="w-3 h-3" />
-                                                </button>
-                                                <span className="text-xl font-bold text-gray-900 min-w-8 text-center">
-                                                    {cardsPresented}
-                                                </span>
-                                                <button
-                                                    onClick={() => cardsPresented < peopleCount && setCardsPresented(cardsPresented + 1)}
-                                                    className="w-8 h-8 rounded-lg bg-white border border-gray-300 flex items-center justify-center hover:bg-gray-50 active:scale-95"
-                                                    aria-label="Increase card count"
-                                                >
-                                                    <Plus className="w-3 h-3" />
-                                                </button>
-                                            </div>
-                                            <div className="mt-1 text-[10px] text-gray-500 text-center">
-                                                Total × 20% ÷ People × Cards
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    {/* Quick Actions */}
-                                    <div className="grid grid-cols-2 gap-2">
-                                        <button
-                                            onClick={() => setShowCustomerModal(true)}
-                                            className="py-2 bg-gradient-to-r from-gray-100 to-gray-50 border border-gray-200 rounded-lg font-medium hover:bg-gray-50 flex items-center justify-center gap-1 text-sm"
-                                            aria-label="Customer information"
-                                        >
-                                            <Edit className="w-3 h-3" />
-                                            Customer
-                                        </button>
-                                        <button
-                                            onClick={() => setShowDiscountModal(true)}
-                                            className="py-2 bg-gradient-to-r from-amber-100 to-yellow-50 border border-amber-200 rounded-lg font-medium text-amber-700 hover:bg-amber-50 flex items-center justify-center gap-1 text-sm"
-                                            aria-label="Apply discount"
-                                        >
-                                            <Percent className="w-3 h-3" />
-                                            Discount
-                                        </button>
-                                    </div>
-                                </div>
-
-                                {/* Order Items - Scrollable */}
-                                <div className="h-[200px] sm:h-[250px] overflow-y-auto">
-                                    <div className="p-4">
-                                        {orderItems.length === 0 ? (
-                                            <div className="text-center py-6">
-                                                <div className="w-16 h-16 mx-auto mb-3 bg-gradient-to-br from-gray-100 to-gray-200 rounded-full flex items-center justify-center">
-                                                    <ShoppingCart className="w-8 h-8 text-gray-400" />
-                                                </div>
-                                                <h3 className="text-sm font-semibold text-gray-700 mb-1">Empty Order</h3>
-                                                <p className="text-xs text-gray-500">Select items from the menu</p>
-                                            </div>
-                                        ) : (
-                                            <div className="space-y-2">
-                                                {orderItems.map((item, index) => {
-                                                    const isUnavailable = item.is_available === false;
-                                                    return (
-                                                        <div key={`${item.id}-${index}`} className={`bg-gradient-to-r from-gray-50 to-white rounded-lg p-3 border ${isUnavailable ? 'border-red-200' : 'border-gray-200'}`}>
-                                                            <div className="flex items-start justify-between gap-2">
-                                                                <div className="flex-1 min-w-0">
-                                                                    {/* ✅ FIXED: Full item name visible */}
-                                                                    <div className="flex items-start gap-1 mb-1">
-                                                                        <h4 className="font-semibold text-gray-900 text-sm break-words">
-                                                                            {item.name}
-                                                                        </h4>
-                                                                        {isUnavailable && (
-                                                                            <span className="px-1.5 py-0.5 text-[10px] font-medium bg-red-100 text-red-800 rounded-full whitespace-nowrap">
-                                                                                Unavailable
-                                                                            </span>
-                                                                        )}
-                                                                    </div>
-                                                                    <div className="text-xs text-gray-600 mb-1">
-                                                                        ₱{formatPrice(item.price)} × {item.quantity}
-                                                                    </div>
-                                                                    <div className="text-sm font-bold text-emerald-600">
-                                                                        ₱{formatPrice(item.price * item.quantity)}
-                                                                    </div>
-                                                                </div>
-                                                                <div className="flex items-center gap-1">
-                                                                    <div className="flex items-center bg-white rounded-lg px-2 py-1 border border-gray-200">
-                                                                        <button
-                                                                            onClick={() => updateQuantity(index, -1)}
-                                                                            className="w-5 h-5 flex items-center justify-center hover:bg-gray-100 rounded active:scale-95"
-                                                                            aria-label={`Decrease ${item.name} quantity`}
-                                                                        >
-                                                                            <Minus className="w-2.5 h-2.5" />
-                                                                        </button>
-                                                                        <span className="w-6 text-center font-semibold text-gray-900 text-sm">
-                                                                            {item.quantity}
-                                                                        </span>
-                                                                        <button
-                                                                            onClick={() => updateQuantity(index, 1)}
-                                                                            className="w-5 h-5 flex items-center justify-center hover:bg-gray-100 rounded active:scale-95"
-                                                                            aria-label={`Increase ${item.name} quantity`}
-                                                                        >
-                                                                            <Plus className="w-2.5 h-2.5" />
-                                                                        </button>
-                                                                    </div>
-                                                                    <button
-                                                                        onClick={() => removeItem(index)}
-                                                                        className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg active:scale-95"
-                                                                        aria-label={`Remove ${item.name} from order`}
-                                                                    >
-                                                                        <Trash2 className="w-3.5 h-3.5" />
-                                                                    </button>
-                                                                </div>
-                                                            </div>
-                                                        </div>
-                                                    );
-                                                })}
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
-
-                                {/* Order Summary */}
-                                <div className="border-t border-gray-200 bg-gradient-to-b from-white to-gray-50 p-4">
-                                    <div className="space-y-2 mb-4">
-                                        <div className="flex justify-between items-center">
-                                            <span className="text-sm text-gray-600">Subtotal:</span>
-                                            <span className="font-semibold text-gray-900">₱{formatPrice(subtotal)}</span>
-                                        </div>
-                                        {cardDiscount > 0 && (
-                                            <div className="flex justify-between items-center">
-                                                <span className="text-sm text-gray-600">
-                                                    Card Discount ({cardsPresented} card{cardsPresented !== 1 ? 's' : ''}):
-                                                </span>
-                                                <span className="font-semibold text-emerald-600">-₱{formatPrice(cardDiscount)}</span>
-                                            </div>
-                                        )}
-                                        {discount.value > 0 && (
-                                            <div className="flex justify-between items-center">
-                                                <span className="text-sm text-gray-600">
-                                                    Additional Discount ({discount.type === 'percentage' ? `${discount.value}%` : 'Fixed'}):
-                                                </span>
-                                                <span className="font-semibold text-amber-600">-₱{formatPrice(additionalDiscount)}</span>
-                                            </div>
-                                        )}
-                                        {totalDiscount > 0 && (
-                                            <div className="border-t border-gray-200 pt-2">
-                                                <div className="flex justify-between items-center">
-                                                    <span className="text-sm text-gray-600">Total Discount:</span>
-                                                    <span className="font-bold text-emerald-600">-₱{formatPrice(totalDiscount)}</span>
+                                                    <button
+                                                        onClick={() => removeItem(index)}
+                                                        className="text-red-500 hover:text-red-600"
+                                                    >
+                                                        <Trash2 className="w-4 h-4" />
+                                                    </button>
                                                 </div>
                                             </div>
-                                        )}
-                                        <div className="border-t border-gray-200 pt-2">
-                                            <div className="flex justify-between items-center">
-                                                <span className="text-base font-bold text-gray-900">Total:</span>
-                                                <span className="text-xl font-bold text-blue-600">₱{formatPrice(total)}</span>
+                                            <div className="flex items-center justify-between">
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-sm text-gray-600">{item.quantity} x ₱{formatPrice(item.price)}</span>
+                                                    <div className="flex items-center gap-1">
+                                                        <button
+                                                            onClick={() => updateQuantity(index, -1)}
+                                                            className="w-6 h-6 bg-gray-100 rounded hover:bg-gray-200 flex items-center justify-center">
+                                                            <Minus className="w-3 h-3" />
+                                                        </button>
+                                                        <span className="w-6 text-center text-sm">{item.quantity}</span>
+                                                        <button
+                                                            onClick={() => updateQuantity(index, 1)}
+                                                            className="w-6 h-6 bg-gray-100 rounded hover:bg-gray-200 flex items-center justify-center">
+                                                            <Plus className="w-3 h-3" />
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                <span className="font-bold text-blue-600">₱{formatPrice(item.price * item.quantity)}</span>
                                             </div>
-                                        </div>
-                                    </div>
-
-                                    {/* Action Buttons */}
-                                    <div className="space-y-2">
-                                        <button
-                                            onClick={clearOrder}
-                                            disabled={orderItems.length === 0}
-                                            className={`w-full py-2.5 rounded-lg font-semibold flex items-center justify-center gap-1.5 ${orderItems.length === 0
-                                                    ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                                                    : 'bg-gradient-to-r from-red-500 to-rose-500 text-white hover:opacity-90 active:scale-[0.98]'
-                                                }`}
-                                            aria-label="Clear order"
-                                        >
-                                            <Trash2 className="w-4 h-4" />
-                                            <span className="text-sm">Clear Order</span>
-                                        </button>
-                                        
-                                        <button
-                                            onClick={placeOrder}
-                                            disabled={orderItems.length === 0 || isLoading}
-                                            className={`w-full py-3 rounded-lg font-bold flex items-center justify-center gap-1.5 ${orderItems.length === 0 || isLoading
-                                                    ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                                                    : 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:opacity-95 active:scale-[0.98]'
-                                                }`}
-                                            aria-label="Place order"
-                                        >
-                                            {isLoading ? (
-                                                <>
-                                                    <Loader2 className="w-4 h-4 animate-spin" />
-                                                    <span className="text-sm">Processing...</span>
-                                                </>
-                                            ) : (
-                                                <>
-                                                    <CheckCircle className="w-4 h-4" />
-                                                    <span className="text-sm">PLACE ORDER</span>
-                                                </>
+                                            {item.notes && (
+                                                <p className="text-xs text-amber-600 mt-1 italic bg-amber-50 p-1 rounded">
+                                                    📝 {item.notes}
+                                                </p>
                                             )}
-                                        </button>
-                                    </div>
+                                            {item.stock !== null && (
+                                                <p className="text-xs text-gray-400 mt-1">
+                                                    Stock available: {item.stock}
+                                                </p>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Order Summary */}
+                        <div className="border-t border-gray-200 p-4 bg-gray-50">
+                            {/* Order Type */}
+                            <div className="mb-4">
+                                <div className="flex gap-2">
+                                    {ORDER_TYPES.map(type => {
+                                        const Icon = type.icon;
+                                        return (
+                                            <button
+                                                key={type.value}
+                                                onClick={() => setOrderType(type.value)}
+                                                className={`flex-1 py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1 ${
+                                                    orderType === type.value
+                                                        ? `${type.color} text-white`
+                                                        : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                                                }`}>
+                                                <Icon className="w-3 h-3" />
+                                                <span>{type.label}</span>
+                                            </button>
+                                        );
+                                    })}
                                 </div>
                             </div>
 
-                            {/* Pending Orders Section */}
-                            <div className="bg-white rounded-xl sm:rounded-2xl shadow-lg border border-gray-200">
-                                <div className="bg-gradient-to-r from-amber-500 to-orange-500 px-4 py-3">
-                                    <div className="flex items-center justify-between">
-                                        <div className="flex items-center space-x-2">
-                                            <div className="p-1.5 bg-white/10 rounded-lg">
-                                                <Clock className="w-4 h-4 text-white" />
-                                            </div>
-                                            <div>
-                                                <h2 className="text-lg font-bold text-white">Pending Orders</h2>
-                                                <p className="text-xs text-amber-100">Awaiting Payment</p>
-                                            </div>
-                                        </div>
-                                        <span className="px-2 py-1 bg-white/20 rounded-full text-xs font-medium text-white">
-                                            {pendingOrders.length} orders
-                                        </span>
-                                    </div>
-                                </div>
+                            {/* Discount Button */}
+                            <button
+                                onClick={openDiscountModal}
+                                className="w-full mb-4 py-2 bg-amber-50 text-amber-700 rounded-lg text-sm font-medium flex items-center justify-center gap-2 hover:bg-amber-100">
+                                <Percent className="w-4 h-4" />
+                                {discount.type !== 'none' ? `${discount.type === 'percentage' ? discount.value + '%' : '₱' + discount.value} off` : 'Add Discount'}
+                            </button>
 
-                                <div className="h-[180px] sm:h-[200px] overflow-y-auto">
-                                    <div className="p-4">
-                                        {pendingOrders.length === 0 ? (
-                                            <div className="text-center py-4">
-                                                <Clock className="w-10 h-10 text-gray-300 mx-auto mb-2" />
-                                                <p className="text-sm text-gray-500">No pending orders</p>
-                                                <p className="text-xs text-gray-400">Updates automatically</p>
-                                            </div>
-                                        ) : (
-                                            <div className="space-y-2">
-                                                {pendingOrders.map((order) => (
-                                                    <div key={order.id} className="border border-gray-200 rounded-lg p-3 bg-gradient-to-r from-amber-50 to-yellow-50 hover:shadow-sm transition-shadow">
-                                                        <div className="flex flex-col gap-2 mb-2">
-                                                            <div className="font-bold text-gray-800 text-sm">
-                                                                Order #{order.id} • {order.formatted_total || `₱${parseFloat(order.total_amount).toFixed(2)}`}
-                                                            </div>
-                                                            <div className="text-xs text-gray-600 line-clamp-2">
-                                                                {order.items_list || 'No items listed'}
-                                                            </div>
-                                                            <div className="text-[10px] text-gray-500 space-y-0.5">
-                                                                {order.customer_name && (
-                                                                    <div className="flex items-center gap-1">
-                                                                        <span className="font-medium">Customer:</span>
-                                                                        <span className="truncate">{order.customer_name}</span>
-                                                                    </div>
-                                                                )}
-                                                                {order.people_count > 1 && (
-                                                                    <div className="flex items-center gap-1">
-                                                                        <Users className="w-2.5 h-2.5" />
-                                                                        <span>{order.people_count} people</span>
-                                                                    </div>
-                                                                )}
-                                                                {order.cards_presented > 0 && (
-                                                                    <div className="flex items-center gap-1">
-                                                                        <Tag className="w-2.5 h-2.5" />
-                                                                        <span>{order.cards_presented} card(s)</span>
-                                                                    </div>
-                                                                )}
-                                                            </div>
-                                                        </div>
-                                                        <div className="flex justify-between items-center">
-                                                            <div className="text-[10px] text-gray-500 flex items-center gap-1">
-                                                                <Clock className="w-2.5 h-2.5" />
-                                                                {order.formatted_time || new Date(order.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                                            </div>
-                                                            <button
-                                                                onClick={() => markAsPaid(order.id)}
-                                                                disabled={processingOrder === order.id}
-                                                                className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center justify-center gap-1 ${processingOrder === order.id
-                                                                        ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                                                                        : 'bg-gradient-to-r from-emerald-500 to-green-500 text-white hover:opacity-90 active:scale-95'
-                                                                    }`}
-                                                                aria-label={`Mark order #${order.id} as paid`}
-                                                            >
-                                                                {processingOrder === order.id ? (
-                                                                    <Loader2 className="w-3 h-3 animate-spin" />
-                                                                ) : (
-                                                                    <CreditCard className="w-3 h-3" />
-                                                                )}
-                                                                <span>Mark Paid</span>
-                                                            </button>
-                                                        </div>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        )}
-                                    </div>
+                            {/* Totals */}
+                            <div className="space-y-2 mb-4">
+                                <div className="flex justify-between text-sm">
+                                    <span className="text-gray-600">Subtotal</span>
+                                    <span className="font-medium">₱{formatPrice(subtotal)}</span>
                                 </div>
+                                {employeeDiscount > 0 && (
+                                    <div className="flex justify-between text-sm">
+                                        <span className="text-gray-600">Employee Discount</span>
+                                        <span className="font-medium text-purple-600">-₱{formatPrice(employeeDiscount)}</span>
+                                    </div>
+                                )}
+                                {cardDiscount > 0 && (
+                                    <div className="flex justify-between text-sm">
+                                        <span className="text-gray-600">Card Discount (20%)</span>
+                                        <span className="font-medium text-emerald-600">-₱{formatPrice(cardDiscount)}</span>
+                                    </div>
+                                )}
+                                {additionalDiscount > 0 && (
+                                    <div className="flex justify-between text-sm">
+                                        <span className="text-gray-600">Additional Discount</span>
+                                        <span className="font-medium text-red-500">-₱{formatPrice(additionalDiscount)}</span>
+                                    </div>
+                                )}
+                                {serviceCharge > 0 && (
+                                    <div className="flex justify-between text-sm">
+                                        <span className="text-gray-600">Hotel Service Charge (10%)</span>
+                                        <span className="font-medium text-amber-600">+₱{formatPrice(serviceCharge)}</span>
+                                    </div>
+                                )}
+                                <div className="border-t border-gray-200 pt-2 flex justify-between font-bold">
+                                    <span>Total</span>
+                                    <span className="text-lg text-blue-600">₱{formatPrice(total)}</span>
+                                </div>
+                            </div>
+
+                            {/* Action Buttons */}
+                            <div className="grid grid-cols-2 gap-2">
+                                <button 
+                                    onClick={clearOrder}
+                                    className="py-3 bg-red-500 text-white rounded-lg hover:bg-red-600 text-sm font-medium flex items-center justify-center gap-2">
+                                    <Trash2 className="w-4 h-4" />
+                                    <span>Clear</span>
+                                </button>
+                                <button 
+                                    onClick={openPaymentModal}
+                                    className="py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium flex items-center justify-center gap-2">
+                                    <CreditCard className="w-4 h-4" />
+                                    <span>Pay</span>
+                                </button>
                             </div>
                         </div>
                     </div>
+
+                    {/* Middle Column - Menu */}
+                    <div className={`${showPendingOrders ? 'w-[45%]' : 'w-[70%]'} flex flex-col bg-gray-50 transition-all duration-300`}>
+                        {/* Search */}
+                        <div className="bg-white border-b border-gray-200 p-4">
+                            <div className="relative">
+                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                                <input
+                                    type="text"
+                                    value={searchQuery}
+                                    onChange={(e) => setSearchQuery(e.target.value)}
+                                    placeholder="Search products..."
+                                    className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                />
+                            </div>
+                        </div>
+
+                        {/* Categories */}
+                        <div className="bg-white px-4 py-3 border-b border-gray-200 overflow-x-auto">
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={() => setActiveCategory('all')}
+                                    className={`px-4 py-2 rounded-lg font-medium whitespace-nowrap ${
+                                        activeCategory === 'all'
+                                            ? 'bg-blue-600 text-white'
+                                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                    }`}>
+                                    All Items
+                                </button>
+                                {categories.map(category => {
+                                    const Icon = categoryIcons[category.name] || ChefHat;
+                                    const itemCount = category.items?.length || 0;
+                                    return (
+                                        <button
+                                            key={category.id}
+                                            onClick={() => setActiveCategory(category.id.toString())}
+                                            className={`px-4 py-2 rounded-lg font-medium whitespace-nowrap flex items-center gap-2 ${
+                                                activeCategory === category.id.toString()
+                                                    ? 'bg-blue-600 text-white'
+                                                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                            }`}>
+                                            <Icon className="w-4 h-4" />
+                                            <span>{category.name}</span>
+                                            {itemCount > 0 && (
+                                                <span className={`text-xs px-1.5 py-0.5 rounded-full ${
+                                                    activeCategory === category.id.toString()
+                                                        ? 'bg-blue-500 text-white'
+                                                        : 'bg-gray-300 text-gray-700'
+                                                }`}>
+                                                    {itemCount}
+                                                </span>
+                                            )}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+
+                        {/* Menu Items Grid */}
+                        <div className="flex-1 overflow-y-auto p-4">
+                            {filteredItems.length === 0 ? (
+                                <div className="text-center py-12">
+                                    <Utensils className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+                                    <p className="text-gray-500">No items found</p>
+                                </div>
+                            ) : (
+                                <div className="grid grid-cols-3 gap-4">
+                                    {filteredItems.map(item => {
+                                        const isUnavailable = item.is_available === false;
+                                        const lowStock = item.stock_quantity !== null && item.stock_quantity <= 5 && item.stock_quantity > 0;
+                                        const outOfStock = item.stock_quantity !== null && item.stock_quantity <= 0;
+                                        const imageUrl = getImageUrl(item.image);
+                                        
+                                        return (
+                                            <button
+                                                key={item.id}
+                                                onClick={() => !isUnavailable && !outOfStock && addToOrder(item)}
+                                                disabled={isUnavailable || outOfStock}
+                                                className={`bg-white rounded-lg border border-gray-200 overflow-hidden hover:shadow-lg transition-all ${
+                                                    isUnavailable || outOfStock ? 'opacity-50 cursor-not-allowed' : 'hover:border-blue-500'
+                                                }`}>
+                                                <div className="aspect-square bg-gray-100 relative">
+                                                    {imageUrl ? (
+                                                        <img 
+                                                            src={imageUrl} 
+                                                            alt={item.name} 
+                                                            className="w-full h-full object-cover"
+                                                            onError={(e) => {
+                                                                e.target.style.display = 'none';
+                                                                e.target.parentElement.innerHTML = '<div class="w-full h-full flex items-center justify-center bg-gray-100"><svg class="w-8 h-8 text-gray-400" ...></svg></div>';
+                                                            }}
+                                                        />
+                                                    ) : (
+                                                        <div className="w-full h-full flex items-center justify-center bg-gray-100">
+                                                            <Utensils className="w-8 h-8 text-gray-400" />
+                                                        </div>
+                                                    )}
+                                                    {outOfStock && (
+                                                        <span className="absolute top-1 right-1 px-1.5 py-0.5 bg-red-500 text-white text-xs rounded">
+                                                            Out of Stock
+                                                        </span>
+                                                    )}
+                                                    {lowStock && !outOfStock && (
+                                                        <span className="absolute top-1 right-1 px-1.5 py-0.5 bg-amber-500 text-white text-xs rounded">
+                                                            Low Stock
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <div className="p-2">
+                                                    <h3 className="font-medium text-gray-900 text-sm truncate">{item.name}</h3>
+                                                    <div className="flex justify-between items-center mt-1">
+                                                        <p className="text-lg font-bold text-blue-600">₱{formatPrice(item.price)}</p>
+                                                        {item.stock_quantity !== null && (
+                                                            <p className="text-xs text-gray-500">Stock: {item.stock_quantity}</p>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* Right Column - Pending Orders */}
+                    {showPendingOrders && (
+                        <div className="w-[25%] bg-white border-l border-gray-200 flex flex-col">
+                            <div className="p-4 border-b border-gray-200 flex justify-between items-center">
+                                <h2 className="font-bold text-gray-900">Pending Orders</h2>
+                                <span className="px-2 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-medium">
+                                    {filteredPendingOrders.length}
+                                </span>
+                            </div>
+
+                            <div className="flex-1 overflow-y-auto p-4">
+                                {filteredPendingOrders.length === 0 ? (
+                                    <div className="text-center py-8">
+                                        <Clock className="w-12 h-12 text-gray-300 mx-auto mb-2" />
+                                        <p className="text-gray-500">No pending orders</p>
+                                    </div>
+                                ) : (
+                                    <div className="space-y-3">
+                                        {filteredPendingOrders.map((order) => {
+                                            const statusBadge = getOrderStatusBadge(order);
+                                            const StatusIcon = statusBadge.icon;
+                                            const button = getOrderButton(order);
+                                            const ButtonIcon = button.icon;
+                                            const isHotel = isHotelOrder(order);
+                                            
+                                            return (
+                                                <div key={order.id} className={`rounded-lg p-3 border ${
+                                                    isHotel 
+                                                        ? 'bg-amber-50 border-amber-300' 
+                                                        : 'bg-amber-50 border-amber-200'
+                                                }`}>
+                                                    <div className="flex justify-between items-start mb-2">
+                                                        <div>
+                                                            <div className="flex items-center gap-2">
+                                                                <span className="font-bold text-gray-900">
+                                                                    {order.display_order_number || `ORD-${String(order.id).padStart(5, '0')}`}
+                                                                </span>
+                                                                {isHotel && (
+                                                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-200 text-amber-800 rounded-full text-xs font-medium">
+                                                                        <Building2 className="w-3 h-3" />
+                                                                        Hotel
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                            {order.customer_name && (
+                                                                <p className="text-xs text-gray-600 mt-1">{order.customer_name}</p>
+                                                            )}
+                                                            {/* Show room number if hotel order */}
+                                                            {isHotel && order.room_number && (
+                                                                <div className="flex items-center gap-1 text-xs text-amber-600 mt-1">
+                                                                    <Hash className="w-3 h-3" />
+                                                                    <span>Room: {order.room_number}</span>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                        <span className="font-bold text-amber-600">₱{formatPrice(order.total_amount)}</span>
+                                                    </div>
+                                                    
+                                                    {/* Status Badge */}
+                                                    <div className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${statusBadge.color} mb-2`}>
+                                                        <StatusIcon className="w-3 h-3" />
+                                                        <span>{statusBadge.text}</span>
+                                                    </div>
+                                                    
+                                                    <p className="text-xs text-gray-600 mb-2 line-clamp-2">
+                                                        {order.items_list || 'No items'}
+                                                    </p>
+                                                    
+                                                    <div className="flex items-center justify-between text-xs text-gray-500 mb-2">
+                                                        <span>{formatPhilippineTime(order.created_at)}</span>
+                                                    </div>
+                                                    
+                                                    {canCompleteOrder(order) ? (
+                                                        <button
+                                                            onClick={() => completeOrder(order.id)}
+                                                            disabled={processingOrder === order.id}
+                                                            className={`w-full py-1.5 ${button.color} text-white rounded text-sm disabled:opacity-50 flex items-center justify-center gap-1`}>
+                                                            {processingOrder === order.id ? (
+                                                                <Loader2 className="w-3 h-3 animate-spin" />
+                                                            ) : (
+                                                                <ButtonIcon className="w-3 h-3" />
+                                                            )}
+                                                            {processingOrder === order.id ? 'Processing...' : button.text}
+                                                        </button>
+                                                    ) : (
+                                                        <button
+                                                            disabled
+                                                            className="w-full py-1.5 bg-gray-400 text-white rounded text-sm cursor-not-allowed flex items-center justify-center gap-1">
+                                                            <ButtonIcon className="w-3 h-3" />
+                                                            {button.text}
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
                 </div>
             </div>
 
-            {/* Discount Modal */}
-            {showDiscountModal && (
-                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white rounded-xl sm:rounded-2xl shadow-2xl max-w-md w-full animate-scale-in">
-                        <div className="p-4 sm:p-6 border-b border-gray-200">
+            {/* Payment Modal */}
+            {showPaymentModal && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-xl shadow-2xl max-w-md w-full max-h-[90vh] overflow-y-auto">
+                        <div className="p-6 border-b border-gray-200 sticky top-0 bg-white z-10">
                             <div className="flex items-center justify-between">
-                                <div className="flex items-center space-x-2 sm:space-x-3">
-                                    <div className="p-2 bg-amber-100 rounded-lg">
-                                        <Percent className="w-4 h-4 sm:w-5 sm:h-5 text-amber-600" />
-                                    </div>
-                                    <h2 className="text-lg sm:text-xl font-bold text-gray-900">Apply Discount</h2>
-                                </div>
-                                <button 
-                                    onClick={() => setShowDiscountModal(false)}
-                                    className="p-1.5 hover:bg-gray-100 rounded-lg"
-                                    aria-label="Close discount modal"
-                                >
-                                    <X className="w-4 h-4 text-gray-500" />
+                                <h2 className="text-xl font-bold text-gray-900">Payment</h2>
+                                <button onClick={() => setShowPaymentModal(false)} className="p-1 hover:bg-gray-100 rounded-lg">
+                                    <X className="w-5 h-5" />
                                 </button>
                             </div>
                         </div>
                         
-                        <div className="p-4 sm:p-6">
-                            <div className="space-y-4">
-                                <div>
-                                    <label className="block text-sm font-semibold text-gray-900 mb-2">Discount Type</label>
-                                    <div className="grid grid-cols-2 gap-2">
-                                        <button
-                                            onClick={() => setDiscount({ type: 'percentage', value: discount.value || 10 })}
-                                            className={`py-2.5 rounded-lg font-medium text-sm ${discount.type === 'percentage'
-                                                    ? 'bg-amber-500 text-white'
-                                                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                                                }`}
-                                        >
-                                            Percentage %
-                                        </button>
-                                        <button
-                                            onClick={() => setDiscount({ type: 'fixed', value: discount.value || 50 })}
-                                            className={`py-2.5 rounded-lg font-medium text-sm ${discount.type === 'fixed'
-                                                    ? 'bg-amber-500 text-white'
-                                                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                                                }`}
-                                        >
-                                            Fixed ₱
-                                        </button>
+                        <div className="p-6">
+                            {/* People & Cards */}
+                            <div className="mb-6 p-4 bg-gray-50 rounded-lg">
+                                <h3 className="font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                                    <Users className="w-4 h-4" />
+                                    <span>People & Cards</span>
+                                </h3>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="text-xs text-gray-500">People</label>
+                                        <div className="flex items-center gap-2 mt-1">
+                                            <button
+                                                onClick={() => setModalPeopleCount(p => Math.max(1, p - 1))}
+                                                className="w-8 h-8 bg-gray-200 rounded-lg hover:bg-gray-300">
+                                                <Minus className="w-4 h-4 mx-auto" />
+                                            </button>
+                                            <span className="flex-1 text-center font-bold text-lg">{modalPeopleCount}</span>
+                                            <button
+                                                onClick={() => setModalPeopleCount(p => p + 1)}
+                                                className="w-8 h-8 bg-gray-200 rounded-lg hover:bg-gray-300">
+                                                <Plus className="w-4 h-4 mx-auto" />
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="text-xs text-gray-500">Cards (20% off each)</label>
+                                        <div className="flex items-center gap-2 mt-1">
+                                            <button
+                                                onClick={() => setModalCardsPresented(c => Math.max(0, c - 1))}
+                                                className="w-8 h-8 bg-gray-200 rounded-lg hover:bg-gray-300">
+                                                <Minus className="w-4 h-4 mx-auto" />
+                                            </button>
+                                            <span className="flex-1 text-center font-bold text-lg">{modalCardsPresented}</span>
+                                            <button
+                                                onClick={() => setModalCardsPresented(c => Math.min(modalPeopleCount, c + 1))}
+                                                className="w-8 h-8 bg-gray-200 rounded-lg hover:bg-gray-300">
+                                                <Plus className="w-4 h-4 mx-auto" />
+                                            </button>
+                                        </div>
                                     </div>
                                 </div>
-                                
-                                <div>
-                                    <label htmlFor="discountValue" className="block text-sm font-semibold text-gray-900 mb-2">
-                                        {discount.type === 'percentage' ? 'Percentage (%)' : 'Amount (₱)'}
+                            </div>
+
+                            {/* Employee Toggle */}
+                            <div className="mb-6">
+                                <div className="flex items-center justify-between p-4 bg-purple-50 rounded-lg border-2 border-purple-200">
+                                    <div className="flex items-center gap-3">
+                                        <div className="p-2 bg-purple-100 rounded-full">
+                                            <Briefcase className="w-5 h-5 text-purple-600" />
+                                        </div>
+                                        <div>
+                                            <h3 className="font-semibold text-gray-900">Employee Order</h3>
+                                            <p className="text-xs text-gray-600">Check if customer is an employee</p>
+                                        </div>
+                                    </div>
+                                    <label className="relative inline-flex items-center cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            className="sr-only peer"
+                                            checked={modalIsEmployee}
+                                            onChange={() => setModalIsEmployee(!modalIsEmployee)}
+                                        />
+                                        <div className={`w-14 h-7 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[4px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all ${
+                                            modalIsEmployee ? 'bg-purple-600' : 'bg-gray-300'
+                                        }`}></div>
+                                        <span className="ml-3 text-sm font-medium text-gray-900">
+                                            {modalIsEmployee ? 'Yes' : 'No'}
+                                        </span>
                                     </label>
-                                    <input
-                                        type="number"
-                                        id="discountValue"
-                                        name="discountValue"
-                                        value={discount.value}
-                                        onChange={(e) => setDiscount({ ...discount, value: Math.max(0, Number(e.target.value)) })}
-                                        className="w-full px-4 py-3 text-base border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent"
-                                        placeholder={discount.type === 'percentage' ? 'Enter percentage' : 'Enter amount'}
-                                        aria-describedby="discountDescription"
-                                    />
-                                    <p id="discountDescription" className="sr-only">
-                                        {discount.type === 'percentage' ? 'Enter discount percentage' : 'Enter discount amount'}
-                                    </p>
                                 </div>
                                 
-                                <div className="grid grid-cols-3 gap-2">
-                                    {discount.type === 'percentage' 
-                                        ? [5, 10, 15, 20, 25, 30].map(pct => (
-                                            <button
-                                                key={pct}
-                                                onClick={() => setDiscount({ ...discount, value: pct })}
-                                                className={`py-1.5 rounded-lg text-sm ${discount.value === pct
-                                                        ? 'bg-amber-100 text-amber-700 border-2 border-amber-500'
-                                                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                                                    }`}
-                                                aria-label={`${pct}% discount`}
-                                            >
-                                                {pct}%
-                                            </button>
-                                        ))
-                                        : [50, 100, 200, 500, 1000].map(amount => (
-                                            <button
-                                                key={amount}
-                                                onClick={() => setDiscount({ ...discount, value: amount })}
-                                                className={`py-1.5 rounded-lg text-sm ${discount.value === amount
-                                                        ? 'bg-amber-100 text-amber-700 border-2 border-amber-500'
-                                                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                                                    }`}
-                                                aria-label={`₱${amount} discount`}
-                                            >
-                                                ₱{amount}
-                                            </button>
-                                        ))
-                                    }
+                                {modalIsEmployee && (
+                                    <div className="mt-3 p-3 bg-purple-50 rounded-lg border border-purple-200">
+                                        <p className="text-xs font-medium text-purple-800 mb-2">💼 Employee discounts applied:</p>
+                                        <ul className="text-xs text-purple-700 space-y-1">
+                                            <li className="flex justify-between">
+                                                <span>• Coffee / Milk / Frappe:</span>
+                                                <span className="font-bold">20% off</span>
+                                            </li>
+                                            <li className="flex justify-between">
+                                                <span>• All Food items:</span>
+                                                <span className="font-bold">5% off</span>
+                                            </li>
+                                            <li className="flex justify-between">
+                                                <span>• Soda:</span>
+                                                <span className="font-bold">10% off</span>
+                                            </li>
+                                            <li className="flex justify-between text-purple-500">
+                                                <span>• Add-ons:</span>
+                                                <span className="font-bold">No discount</span>
+                                            </li>
+                                        </ul>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Payment Methods */}
+                            <h3 className="font-semibold text-gray-700 mb-3">Payment Method</h3>
+                            <div className="grid grid-cols-2 gap-3 mb-6">
+                                {PAYMENT_METHODS.map(method => {
+                                    const Icon = method.icon;
+                                    const isSelected = selectedPaymentMethod?.id === method.id;
+                                    return (
+                                        <button
+                                            key={method.id}
+                                            onClick={() => setSelectedPaymentMethod(method)}
+                                            className={`p-4 rounded-lg border-2 transition-all ${
+                                                isSelected
+                                                    ? `${method.bgColor} border-${method.color.split('-')[1]}-500`
+                                                    : 'border-gray-200 hover:border-gray-300'
+                                            }`}>
+                                            <Icon className={`w-8 h-8 mx-auto mb-2 ${isSelected ? method.textColor : 'text-gray-600'}`} />
+                                            <span className={`text-sm font-medium ${isSelected ? method.textColor : 'text-gray-600'}`}>
+                                                {method.name}
+                                            </span>
+                                            {method.name === 'Hotel' && isSelected && (
+                                                <span className="text-xs text-amber-600 block mt-1">+10% Service Charge</span>
+                                            )}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+
+                            {/* Order Summary */}
+                            <div className="mb-6 p-4 bg-blue-50 rounded-lg">
+                                <h3 className="font-semibold text-gray-700 mb-3">Order Summary</h3>
+                                <div className="space-y-2">
+                                    <div className="flex justify-between">
+                                        <span>Subtotal</span>
+                                        <span>₱{formatPrice(modalTotals.subtotal)}</span>
+                                    </div>
+                                    {modalTotals.employeeDiscount > 0 && (
+                                        <div className="flex justify-between text-purple-600">
+                                            <span>Employee Discount</span>
+                                            <span>-₱{formatPrice(modalTotals.employeeDiscount)}</span>
+                                        </div>
+                                    )}
+                                    {modalTotals.cardDiscount > 0 && (
+                                        <div className="flex justify-between text-emerald-600">
+                                            <span>Card Discount</span>
+                                            <span>-₱{formatPrice(modalTotals.cardDiscount)}</span>
+                                        </div>
+                                    )}
+                                    {modalTotals.additionalDiscount > 0 && (
+                                        <div className="flex justify-between text-red-500">
+                                            <span>Additional Discount</span>
+                                            <span>-₱{formatPrice(modalTotals.additionalDiscount)}</span>
+                                        </div>
+                                    )}
+                                    {modalTotals.serviceCharge > 0 && (
+                                        <div className="flex justify-between text-amber-600">
+                                            <span>Hotel Service Charge (10%)</span>
+                                            <span>+₱{formatPrice(modalTotals.serviceCharge)}</span>
+                                        </div>
+                                    )}
+                                    <div className="border-t border-blue-200 pt-2 mt-2">
+                                        <div className="flex justify-between items-center">
+                                            <span className="font-bold">Total</span>
+                                            <span className="text-2xl font-bold text-blue-600">₱{formatPrice(modalTotals.total)}</span>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
-                            
-                            <div className="mt-6 flex space-x-2">
+
+                            {/* Cash Input */}
+                            {selectedPaymentMethod?.name === 'Cash' && (
+                                <div className="mb-6">
+                                    <label className="block text-sm font-semibold text-gray-900 mb-2">Cash Received</label>
+                                    <input
+                                        type="number"
+                                        value={cashAmount}
+                                        onChange={(e) => setCashAmount(e.target.value)}
+                                        placeholder="Enter amount"
+                                        className="w-full px-4 py-3 text-lg border rounded-lg focus:ring-2 focus:ring-blue-500"
+                                        autoFocus
+                                    />
+                                    {cashAmount && Number(cashAmount) >= modalTotals.total && (
+                                        <div className="mt-2 text-green-600 font-medium">
+                                            Change: ₱{formatPrice(Number(cashAmount) - modalTotals.total)}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* Hotel Information */}
+                            {selectedPaymentMethod?.name === 'Hotel' && (
+                                <div className="mb-6 space-y-4">
+                                    <div>
+                                        <label className="block text-sm font-semibold text-gray-900 mb-2">Guest Name</label>
+                                        <div className="relative">
+                                            <Building className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                                            <input
+                                                type="text"
+                                                value={hotelInfo.guestName}
+                                                onChange={(e) => setHotelInfo({...hotelInfo, guestName: e.target.value})}
+                                                placeholder="Enter guest name"
+                                                className="w-full pl-10 pr-4 py-3 text-lg border rounded-lg focus:ring-2 focus:ring-amber-500"
+                                                autoFocus
+                                            />
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-semibold text-gray-900 mb-2">Room Number</label>
+                                        <div className="relative">
+                                            <Hash className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                                            <input
+                                                type="text"
+                                                value={hotelInfo.roomNumber}
+                                                onChange={(e) => setHotelInfo({...hotelInfo, roomNumber: e.target.value})}
+                                                placeholder="Enter room number"
+                                                className="w-full pl-10 pr-4 py-3 text-lg border rounded-lg focus:ring-2 focus:ring-amber-500"
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="bg-amber-50 p-3 rounded-lg text-sm text-amber-800">
+                                        <p className="font-medium">🏨 Hotel Order</p>
+                                        <p className="text-xs mt-1">10% service charge will be applied</p>
+                                        <p className="text-xs">Card discounts still apply</p>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Actions */}
+                            <div className="flex gap-3">
                                 <button
-                                    onClick={() => {
-                                        setDiscount({ type: 'none', value: 0 });
-                                        setShowDiscountModal(false);
-                                    }}
-                                    className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-lg font-medium hover:bg-gray-200 text-sm"
-                                    aria-label="Remove discount"
-                                >
-                                    Remove
+                                    onClick={() => setShowPaymentModal(false)}
+                                    className="flex-1 py-3 bg-gray-100 text-gray-700 rounded-lg font-medium hover:bg-gray-200">
+                                    Cancel
                                 </button>
                                 <button
-                                    onClick={() => setShowDiscountModal(false)}
-                                    className="flex-1 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-lg font-medium hover:opacity-90 text-sm"
-                                    aria-label="Apply discount"
-                                >
-                                    Apply
+                                    onClick={handlePlaceOrder}
+                                    disabled={!selectedPaymentMethod || isLoading}
+                                    className={`flex-1 py-3 rounded-lg font-bold ${
+                                        !selectedPaymentMethod || isLoading
+                                            ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                                            : 'bg-blue-600 text-white hover:bg-blue-700'
+                                    }`}>
+                                    {isLoading ? <Loader2 className="w-5 h-5 animate-spin mx-auto" /> : 'Confirm Order'}
                                 </button>
                             </div>
                         </div>
@@ -1466,99 +1860,111 @@ export default function POS({
                 </div>
             )}
 
-            {/* Customer Modal */}
-            {showCustomerModal && (
-                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white rounded-xl sm:rounded-2xl shadow-2xl max-w-md w-full animate-scale-in">
-                        <div className="p-4 sm:p-6 border-b border-gray-200">
+            {/* Discount Modal */}
+            {showDiscountModal && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-xl shadow-2xl max-w-md w-full">
+                        <div className="p-6 border-b border-gray-200">
                             <div className="flex items-center justify-between">
-                                <div className="flex items-center space-x-2 sm:space-x-3">
-                                    <div className="p-2 bg-blue-100 rounded-lg">
-                                        <Users className="w-4 h-4 sm:w-5 sm:h-5 text-blue-600" />
-                                    </div>
-                                    <h2 className="text-lg sm:text-xl font-bold text-gray-900">Customer Information</h2>
-                                </div>
-                                <button 
-                                    onClick={() => setShowCustomerModal(false)}
-                                    className="p-1.5 hover:bg-gray-100 rounded-lg"
-                                    aria-label="Close customer modal"
-                                >
-                                    <X className="w-4 h-4 text-gray-500" />
+                                <h2 className="text-xl font-bold">Apply Additional Discount</h2>
+                                <button onClick={() => setShowDiscountModal(false)} className="p-1 hover:bg-gray-100 rounded-lg">
+                                    <X className="w-5 h-5" />
                                 </button>
                             </div>
                         </div>
-                        
-                        <div className="p-4 sm:p-6 space-y-3">
-                            <div>
-                                <label htmlFor="customerName" className="block text-sm font-semibold text-gray-900 mb-1">Name (Optional)</label>
-                                <input
-                                    type="text"
-                                    id="customerName"
-                                    name="customerName"
-                                    value={customerInfo.name}
-                                    onChange={(e) => setCustomerInfo({ ...customerInfo, name: e.target.value })}
-                                    placeholder="Customer name"
-                                    className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
-                                    aria-describedby="customerNameDescription"
-                                />
-                                <p id="customerNameDescription" className="sr-only">Enter customer name (optional)</p>
-                            </div>
-                            
-                            <div>
-                                <label htmlFor="customerPhone" className="block text-sm font-semibold text-gray-900 mb-1">Phone (Optional)</label>
-                                <input
-                                    type="tel"
-                                    id="customerPhone"
-                                    name="customerPhone"
-                                    value={customerInfo.phone}
-                                    onChange={(e) => setCustomerInfo({ ...customerInfo, phone: e.target.value })}
-                                    placeholder="Phone number"
-                                    className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
-                                    aria-describedby="customerPhoneDescription"
-                                />
-                                <p id="customerPhoneDescription" className="sr-only">Enter customer phone number (optional)</p>
-                            </div>
-                            
-                            {orderType === 'delivery' && (
-                                <div>
-                                    <label htmlFor="customerAddress" className="block text-sm font-semibold text-gray-900 mb-1">Delivery Address</label>
-                                    <textarea
-                                        id="customerAddress"
-                                        name="customerAddress"
-                                        value={customerInfo.address}
-                                        onChange={(e) => setCustomerInfo({ ...customerInfo, address: e.target.value })}
-                                        placeholder="Full delivery address"
-                                        rows="2"
-                                        className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
-                                        aria-describedby="customerAddressDescription"
-                                    />
-                                    <p id="customerAddressDescription" className="sr-only">Enter delivery address</p>
+                        <div className="p-6">
+                            <div className="space-y-4">
+                                <div className="grid grid-cols-2 gap-3">
+                                    <button
+                                        onClick={() => setDiscount({ type: 'percentage', value: 10 })}
+                                        className={`py-3 rounded-lg font-medium ${
+                                            discount.type === 'percentage' ? 'bg-amber-500 text-white' : 'bg-gray-100 hover:bg-gray-200'
+                                        }`}>
+                                        Percentage %
+                                    </button>
+                                    <button
+                                        onClick={() => setDiscount({ type: 'fixed', value: 50 })}
+                                        className={`py-3 rounded-lg font-medium ${
+                                            discount.type === 'fixed' ? 'bg-amber-500 text-white' : 'bg-gray-100 hover:bg-gray-200'
+                                        }`}>
+                                        Fixed ₱
+                                    </button>
                                 </div>
-                            )}
-                            
-                            <div>
-                                <label htmlFor="orderNotes" className="block text-sm font-semibold text-gray-900 mb-1">Order Notes (Optional)</label>
-                                <textarea
-                                    id="orderNotes"
-                                    name="orderNotes"
-                                    value={customerInfo.notes}
-                                    onChange={(e) => setCustomerInfo({ ...customerInfo, notes: e.target.value })}
-                                    placeholder="Special instructions for kitchen..."
-                                    rows="2"
-                                    className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
-                                    aria-describedby="orderNotesDescription"
-                                />
-                                <p id="orderNotesDescription" className="sr-only">Enter order notes for kitchen (optional)</p>
+                                
+                                {discount.type !== 'none' && (
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                                            {discount.type === 'percentage' ? 'Percentage %' : 'Amount (₱)'}
+                                        </label>
+                                        <input
+                                            type="number"
+                                            value={discount.value}
+                                            onChange={(e) => setDiscount({...discount, value: Number(e.target.value)})}
+                                            className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500"
+                                            min="0"
+                                            max={discount.type === 'percentage' ? 100 : undefined}
+                                        />
+                                    </div>
+                                )}
+                                <p className="text-xs text-gray-500 mt-2">
+                                    Note: This discount is applied after employee and card discounts.
+                                </p>
                             </div>
                         </div>
-                        
-                        <div className="p-4 sm:p-6 border-t border-gray-200">
+                        <div className="p-6 border-t border-gray-200 flex gap-3">
                             <button
-                                onClick={() => setShowCustomerModal(false)}
-                                className="w-full py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-lg font-medium hover:opacity-90 text-sm"
-                                aria-label="Save customer information"
-                            >
-                                Save Information
+                                onClick={() => {
+                                    setDiscount({ type: 'none', value: 0 });
+                                    setShowDiscountModal(false);
+                                }}
+                                className="flex-1 py-2 bg-gray-100 text-gray-700 rounded-lg font-medium hover:bg-gray-200">
+                                Remove
+                            </button>
+                            <button
+                                onClick={() => setShowDiscountModal(false)}
+                                className="flex-1 py-2 bg-amber-500 text-white rounded-lg font-medium hover:bg-amber-600">
+                                Apply
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Notes Modal */}
+            {showNotesModal && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-xl shadow-2xl max-w-md w-full">
+                        <div className="p-6 border-b border-gray-200">
+                            <div className="flex items-center justify-between">
+                                <h2 className="text-xl font-bold">Add Note for Item</h2>
+                                <button onClick={() => setShowNotesModal(false)} className="p-1 hover:bg-gray-100 rounded-lg">
+                                    <X className="w-5 h-5" />
+                                </button>
+                            </div>
+                        </div>
+                        <div className="p-6">
+                            <textarea
+                                value={currentNote}
+                                onChange={(e) => setCurrentNote(e.target.value)}
+                                placeholder="e.g., No peanuts, extra spicy, etc."
+                                className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                                rows="4"
+                                autoFocus
+                            />
+                            <p className="text-xs text-gray-500 mt-2">
+                                This note will appear in the kitchen for the chef.
+                            </p>
+                        </div>
+                        <div className="p-6 border-t border-gray-200 flex gap-3">
+                            <button
+                                onClick={() => setShowNotesModal(false)}
+                                className="flex-1 py-2 bg-gray-100 text-gray-700 rounded-lg font-medium hover:bg-gray-200">
+                                Cancel
+                            </button>
+                            <button
+                                onClick={saveItemNote}
+                                className="flex-1 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700">
+                                Save Note
                             </button>
                         </div>
                     </div>
