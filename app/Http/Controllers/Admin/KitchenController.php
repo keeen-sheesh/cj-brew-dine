@@ -126,75 +126,100 @@ class KitchenController extends Controller
     }
 
     public function checkNewOrders(Request $request)
-    {
-        $since = $request->get('since', now()->subMinutes(5)->timestamp);
-        $sinceDateTime = date('Y-m-d H:i:s', $since);
-        $dateFilter = $request->get('date', now()->format('Y-m-d'));
-        
-        // Check if there are ANY new orders since last check - including completed for display
-        $hasNewOrders = Sale::whereHas('saleItems.item.category', function($query) {
-                $query->where('is_kitchen_category', 1);
-            })
-            ->whereIn('status', ['pending', 'preparing', 'ready'])
-            ->where('created_at', '>', $sinceDateTime)
-            ->whereDate('created_at', $dateFilter)
-            ->exists();
-        
-        // Get all kitchen orders for the date - INCLUDING COMPLETED
-        $allOrders = Sale::with(['saleItems.item.category', 'customer', 'paymentMethod'])
-            ->whereHas('saleItems.item.category', function($query) {
-                $query->where('is_kitchen_category', 1);
-            })
-            ->whereIn('status', ['pending', 'preparing', 'ready', 'completed']) // ADDED 'completed'
-            ->whereDate('created_at', $dateFilter)
-            ->orderBy('created_at', 'asc')
-            ->get()
-            ->map(function($order) {
-                $kitchenItems = [];
-                foreach ($order->saleItems as $item) {
-                    if ($item->item && $item->item->category && $item->item->category->is_kitchen_category == 1) {
-                        $kitchenItems[] = [
-                            'id' => $item->id,
-                            'name' => $item->item->name,
-                            'quantity' => $item->quantity,
-                            'kitchen_status' => $item->kitchen_status ?? 'pending',
-                            'notes' => $item->special_instructions,
-                        ];
-                    }
+{
+    $since = $request->get('since', now()->subMinutes(5)->timestamp);
+    $sinceDateTime = date('Y-m-d H:i:s', $since);
+    $dateFilter = $request->get('date', now()->format('Y-m-d'));
+    
+    Log::info('========== KITCHEN POLLING CHECK ==========');
+    Log::info('Polling parameters:', [
+        'since' => $since,
+        'sinceDateTime' => $sinceDateTime,
+        'dateFilter' => $dateFilter
+    ]);
+    
+    // Check if there are ANY new or updated orders since last check
+    $newOrdersQuery = Sale::whereHas('saleItems.item.category', function($query) {
+            $query->where('is_kitchen_category', 1);
+        })
+        ->whereIn('status', ['pending', 'preparing', 'ready', 'completed'])
+        ->where(function($query) use ($sinceDateTime) {
+            $query->where('created_at', '>', $sinceDateTime)
+                  ->orWhere('updated_at', '>', $sinceDateTime);
+        })
+        ->whereDate('created_at', $dateFilter);
+    
+    $newOrdersCount = $newOrdersQuery->count();
+    $hasNewOrders = $newOrdersCount > 0;
+    
+    Log::info('New orders found:', ['count' => $newOrdersCount]);
+    
+    // Get all kitchen orders for the date
+    $allOrdersQuery = Sale::with(['saleItems.item.category', 'customer', 'paymentMethod'])
+        ->whereHas('saleItems.item.category', function($query) {
+            $query->where('is_kitchen_category', 1);
+        })
+        ->whereIn('status', ['pending', 'preparing', 'ready', 'completed'])
+        ->whereDate('created_at', $dateFilter)
+        ->orderBy('created_at', 'asc');
+    
+    $allOrdersCount = $allOrdersQuery->count();
+    Log::info('Total orders in date range:', ['count' => $allOrdersCount]);
+    
+    $allOrders = $allOrdersQuery->get()
+        ->map(function($order) {
+            $kitchenItems = [];
+            foreach ($order->saleItems as $item) {
+                if ($item->item && $item->item->category && $item->item->category->is_kitchen_category == 1) {
+                    $kitchenItems[] = [
+                        'id' => $item->id,
+                        'name' => $item->item->name,
+                        'quantity' => $item->quantity,
+                        'kitchen_status' => $item->kitchen_status ?? 'pending',
+                        'notes' => $item->special_instructions,
+                    ];
                 }
+            }
 
-                $isHotel = $order->paymentMethod && $order->paymentMethod->name === 'Hotel';
-                $customerName = $order->customer_name ?? 'Walk-in Customer';
+            $isHotel = $order->paymentMethod && $order->paymentMethod->name === 'Hotel';
+            $customerName = $order->customer_name ?? 'Walk-in Customer';
 
-                return [
-                    'id' => $order->id,
-                    'order_number' => 'ORD-' . str_pad($order->id, 5, '0', STR_PAD_LEFT),
-                    'order_type' => $order->order_type ?? 'takeout',
-                    'customer_name' => $customerName,
-                    'is_hotel' => $isHotel,
-                    'payment_method_name' => $order->paymentMethod ? $order->paymentMethod->name : null,
-                    'room_number' => $order->room_number ?? null,
-                    'created_at' => $order->created_at->toIso8601String(),
-                    'created_at_raw' => $order->created_at->timestamp,
-                    'created_at_full' => $order->created_at->toIso8601String(),
-                    'kitchen_status' => $order->kitchen_status ?? 'pending',
-                    'items' => $kitchenItems,
-                    'item_count' => count($kitchenItems),
-                ];
-            })
-            ->filter(function($order) {
-                return $order['item_count'] > 0;
-            })
-            ->values();
+            return [
+                'id' => $order->id,
+                'order_number' => 'ORD-' . str_pad($order->id, 5, '0', STR_PAD_LEFT),
+                'order_type' => $order->order_type ?? 'takeout',
+                'customer_name' => $customerName,
+                'is_hotel' => $isHotel,
+                'payment_method_name' => $order->paymentMethod ? $order->paymentMethod->name : null,
+                'room_number' => $order->room_number ?? null,
+                'created_at' => $order->created_at->toIso8601String(),
+                'created_at_raw' => $order->created_at->timestamp,
+                'created_at_full' => $order->created_at->toIso8601String(),
+                'kitchen_status' => $order->kitchen_status ?? 'pending',
+                'items' => $kitchenItems,
+                'item_count' => count($kitchenItems),
+            ];
+        })
+        ->filter(function($order) {
+            return $order['item_count'] > 0;
+        })
+        ->values();
 
-        return response()->json([
-            'success' => true,
-            'orders' => $allOrders,
-            'has_new_orders' => $hasNewOrders,
-            'timestamp' => now()->timestamp,
-            'count' => $allOrders->count(),
-        ]);
-    }
+    Log::info('Kitchen polling response:', [
+        'success' => true,
+        'orders_count' => $allOrders->count(),
+        'has_new_orders' => $hasNewOrders,
+        'timestamp' => now()->timestamp
+    ]);
+
+    return response()->json([
+        'success' => true,
+        'orders' => $allOrders,
+        'has_new_orders' => $hasNewOrders,
+        'timestamp' => now()->timestamp,
+        'count' => $allOrders->count(),
+    ]);
+}
 
     public function startPreparing(Request $request, Sale $order)
     {

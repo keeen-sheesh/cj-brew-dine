@@ -771,7 +771,7 @@ export default function Kitchen({ orders = [], hasNewOrder: initialHasNewOrder }
                 </div>
                 <div>
                   <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">
-                    Kitchen Display System
+                    Kitchen
                   </h1>
                   <p className="text-sm text-gray-600 mt-1 flex items-center gap-2">
                     <Clock className="w-4 h-4" />

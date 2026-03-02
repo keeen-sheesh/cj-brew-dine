@@ -60,7 +60,7 @@ class FoodItemController extends Controller
         // Handle API/JSON requests
         if ($request->wantsJson() || $request->ajax() || $request->has('limit')) {
             $limit = $request->get('limit', 1000);
-            $items = $query->limit($limit)->get();
+            $items = $query->with('ingredients')->limit($limit)->get();
             
             return response()->json([
                 'success' => true,
@@ -78,6 +78,21 @@ class FoodItemController extends Controller
                         'low_stock_threshold' => (int)$item->low_stock_threshold,
                         'sort_order' => (int)$item->sort_order,
                         'image' => $item->image,
+                        'pricing_type' => $item->pricing_type ?? 'single',
+                        'price_solo' => $item->price_solo ? (float)$item->price_solo : null,
+                        'price_whole' => $item->price_whole ? (float)$item->price_whole : null,
+                        'has_recipe' => (bool)$item->has_recipe,
+                        'ingredients' => $item->ingredients->map(function($ing) {
+                            return [
+                                'id' => $ing->id,
+                                'name' => $ing->name,
+                                'quantity_required' => (float)$ing->pivot->quantity_required,
+                                'unit' => $ing->pivot->unit ?? $ing->unit,
+                                'notes' => $ing->pivot->notes,
+                                'cost_per_unit' => (float)$ing->cost_per_unit,
+                                'quantity' => (float)$ing->quantity,
+                            ];
+                        }),
                     ];
                 }),
             ]);
@@ -105,16 +120,21 @@ class FoodItemController extends Controller
             $validated = $request->validate([
                 'name' => 'required|string|max:255|unique:items,name',
                 'description' => 'nullable|string',
-                'price' => 'required|numeric|min:0',
+                'price' => 'nullable|numeric|min:0',
                 'category_id' => 'required|exists:categories,id',
                 'ingredients' => 'nullable|string',
                 'preparation_time' => 'nullable|integer|min:0',
-                'stock_quantity' => 'required|integer|min:0',
-                'low_stock_threshold' => 'required|integer|min:0',
+                'stock_quantity' => 'nullable|integer|min:0',
+                'low_stock_threshold' => 'nullable|integer|min:0',
                 'is_featured' => 'nullable|boolean',
                 'is_available' => 'nullable|boolean',
                 'sort_order' => 'nullable|integer',
                 'image' => 'nullable|image|max:2048',
+                // New fields for dual pricing and recipe
+                'pricing_type' => 'nullable|string|in:single,dual',
+                'price_solo' => 'nullable|numeric|min:0',
+                'price_whole' => 'nullable|numeric|min:0',
+                'has_recipe' => 'nullable|boolean',
             ]);
 
             // Handle image upload
@@ -132,11 +152,49 @@ class FoodItemController extends Controller
             // Set defaults
             $validated['is_available'] = isset($validated['is_available']) ? (bool)$validated['is_available'] : true;
             $validated['is_featured'] = isset($validated['is_featured']) ? (bool)$validated['is_featured'] : false;
+            $validated['pricing_type'] = $validated['pricing_type'] ?? 'single';
+            $validated['has_recipe'] = isset($validated['has_recipe']) ? (bool)$validated['has_recipe'] : false;
+            
+            // Set price based on pricing type
+            if (($validated['pricing_type'] ?? 'single') === 'dual') {
+                $validated['price'] = $validated['price_solo'] ?? 0;
+            } else {
+                $validated['price_solo'] = null;
+                $validated['price_whole'] = null;
+            }
+
+            // Handle ingredients JSON
+            $ingredientsData = null;
+            if ($request->has('ingredients') && !empty($request->ingredients)) {
+                $ingredientsData = json_decode($request->ingredients, true);
+                if (json_last_error() !== JSON_ERROR_NONE) {
+                    throw new \Exception('Invalid ingredients JSON format');
+                }
+            }
 
             $item = Item::create($validated);
             
-            // Load category relationship
+            // Attach ingredients if provided
+            if ($ingredientsData && is_array($ingredientsData)) {
+                $ingredientSync = [];
+                foreach ($ingredientsData as $ing) {
+                    if (isset($ing['id'])) {
+                        $ingredientSync[$ing['id']] = [
+                            'quantity_required' => $ing['quantity_required'] ?? 0,
+                            'unit' => $ing['unit'] ?? 'unit',
+                            'notes' => $ing['notes'] ?? null,
+                        ];
+                    }
+                }
+                if (!empty($ingredientSync)) {
+                    $item->ingredients()->sync($ingredientSync);
+                    $item->update(['has_recipe' => true]);
+                }
+            }
+            
+            // Load relationships
             $item->load('category');
+            $item->load('ingredients');
             
             DB::commit();
 
@@ -149,20 +207,7 @@ class FoodItemController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'Food item created successfully!',
-                'item' => [
-                    'id' => $item->id,
-                    'name' => $item->name,
-                    'description' => $item->description,
-                    'price' => (float)$item->price,
-                    'category_id' => $item->category_id,
-                    'category_name' => $item->category->name ?? '',
-                    'is_available' => (bool)$item->is_available,
-                    'is_featured' => (bool)$item->is_featured,
-                    'stock_quantity' => (int)$item->stock_quantity,
-                    'low_stock_threshold' => (int)$item->low_stock_threshold,
-                    'sort_order' => (int)$item->sort_order,
-                    'image' => $item->image,
-                ],
+                'item' => $this->formatItem($item),
                 'stats' => $stats,
             ]);
 
@@ -188,16 +233,22 @@ class FoodItemController extends Controller
             $validated = $request->validate([
                 'name' => 'required|string|max:255|unique:items,name,' . $item->id,
                 'description' => 'nullable|string',
-                'price' => 'required|numeric|min:0',
+                'price' => 'nullable|numeric|min:0',
                 'category_id' => 'required|exists:categories,id',
                 'ingredients' => 'nullable|string',
                 'preparation_time' => 'nullable|integer|min:0',
-                'stock_quantity' => 'required|integer|min:0',
-                'low_stock_threshold' => 'required|integer|min:0',
+                'stock_quantity' => 'nullable|integer|min:0',
+                'low_stock_threshold' => 'nullable|integer|min:0',
                 'is_featured' => 'nullable|boolean',
                 'is_available' => 'nullable|boolean',
                 'sort_order' => 'nullable|integer',
                 'image' => 'nullable|image|max:2048',
+                'remove_image' => 'nullable|boolean',
+                // New fields for dual pricing and recipe
+                'pricing_type' => 'nullable|string|in:single,dual',
+                'price_solo' => 'nullable|numeric|min:0',
+                'price_whole' => 'nullable|numeric|min:0',
+                'has_recipe' => 'nullable|boolean',
             ]);
 
             // Handle image upload
@@ -217,10 +268,55 @@ class FoodItemController extends Controller
                 $validated['image'] = null;
             }
 
+            // Set defaults
+            $validated['is_available'] = isset($validated['is_available']) ? (bool)$validated['is_available'] : $item->is_available;
+            $validated['is_featured'] = isset($validated['is_featured']) ? (bool)$validated['is_featured'] : $item->is_featured;
+            $validated['pricing_type'] = $validated['pricing_type'] ?? $item->pricing_type ?? 'single';
+            $validated['has_recipe'] = isset($validated['has_recipe']) ? (bool)$validated['has_recipe'] : $item->has_recipe ?? false;
+            
+            // Set price based on pricing type
+            if (($validated['pricing_type'] ?? 'single') === 'dual') {
+                $validated['price'] = $validated['price_solo'] ?? $item->price_solo ?? 0;
+            } else {
+                $validated['price_solo'] = null;
+                $validated['price_whole'] = null;
+            }
+
+            // Handle ingredients JSON
+            $ingredientsData = null;
+            if ($request->has('ingredients') && !empty($request->ingredients)) {
+                $ingredientsData = json_decode($request->ingredients, true);
+                if (json_last_error() !== JSON_ERROR_NONE) {
+                    throw new \Exception('Invalid ingredients JSON format');
+                }
+            }
+
             $item->update($validated);
             
-            // Load category relationship
+            // Sync ingredients if provided
+            if ($ingredientsData && is_array($ingredientsData)) {
+                $ingredientSync = [];
+                foreach ($ingredientsData as $ing) {
+                    if (isset($ing['id'])) {
+                        $ingredientSync[$ing['id']] = [
+                            'quantity_required' => $ing['quantity_required'] ?? 0,
+                            'unit' => $ing['unit'] ?? 'unit',
+                            'notes' => $ing['notes'] ?? null,
+                        ];
+                    }
+                }
+                if (!empty($ingredientSync)) {
+                    $item->ingredients()->sync($ingredientSync);
+                    $item->update(['has_recipe' => true]);
+                } else {
+                    $item->ingredients()->sync([]);
+                    $item->update(['has_recipe' => false]);
+                }
+            }
+            
+            // Load relationships
             $item->load('category');
+            $item->load('ingredients');
             
             DB::commit();
 
@@ -230,20 +326,7 @@ class FoodItemController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'Food item updated successfully!',
-                'item' => [
-                    'id' => $item->id,
-                    'name' => $item->name,
-                    'description' => $item->description,
-                    'price' => (float)$item->price,
-                    'category_id' => $item->category_id,
-                    'category_name' => $item->category->name ?? '',
-                    'is_available' => (bool)$item->is_available,
-                    'is_featured' => (bool)$item->is_featured,
-                    'stock_quantity' => (int)$item->stock_quantity,
-                    'low_stock_threshold' => (int)$item->low_stock_threshold,
-                    'sort_order' => (int)$item->sort_order,
-                    'image' => $item->image,
-                ],
+                'item' => $this->formatItem($item),
             ]);
 
         } catch (\Exception $e) {
@@ -511,5 +594,49 @@ class FoodItemController extends Controller
         } catch (\Exception $e) {
             Log::error('Failed to broadcast menu update: ' . $e->getMessage());
         }
+    }
+
+    /**
+     * Format item for JSON response
+     */
+    private function formatItem($item)
+    {
+        // Load ingredients if not already loaded
+        if (!$item->relationLoaded('ingredients')) {
+            $item->load('ingredients');
+        }
+        if (!$item->relationLoaded('category')) {
+            $item->load('category');
+        }
+
+        return [
+            'id' => $item->id,
+            'name' => $item->name,
+            'description' => $item->description,
+            'price' => (float)$item->price,
+            'category_id' => $item->category_id,
+            'category_name' => $item->category->name ?? '',
+            'is_available' => (bool)$item->is_available,
+            'is_featured' => (bool)$item->is_featured,
+            'stock_quantity' => (int)$item->stock_quantity,
+            'low_stock_threshold' => (int)$item->low_stock_threshold,
+            'sort_order' => (int)$item->sort_order,
+            'image' => $item->image,
+            'pricing_type' => $item->pricing_type ?? 'single',
+            'price_solo' => $item->price_solo ? (float)$item->price_solo : null,
+            'price_whole' => $item->price_whole ? (float)$item->price_whole : null,
+            'has_recipe' => (bool)$item->has_recipe,
+            'ingredients' => $item->ingredients->map(function($ing) {
+                return [
+                    'id' => $ing->id,
+                    'name' => $ing->name,
+                    'quantity_required' => (float)$ing->pivot->quantity_required,
+                    'unit' => $ing->pivot->unit ?? $ing->unit,
+                    'notes' => $ing->pivot->notes,
+                    'cost_per_unit' => (float)$ing->cost_per_unit,
+                    'quantity' => (float)$ing->quantity,
+                ];
+            }),
+        ];
     }
 }

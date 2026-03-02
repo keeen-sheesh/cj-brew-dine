@@ -3,9 +3,13 @@
 use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\FoodCategoryController;
 use App\Http\Controllers\Admin\FoodItemController;
+use App\Http\Controllers\Admin\InventoryController;
+use App\Http\Controllers\Admin\InventoryReportController;
+use App\Http\Controllers\Admin\PurchaseOrderController;
 use App\Http\Controllers\Admin\ReportsController;
 use App\Http\Controllers\Admin\PosController;
 use App\Http\Controllers\Admin\KitchenController;
+use App\Http\Controllers\Admin\SupplierController;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
@@ -52,26 +56,6 @@ Route::middleware(['auth', 'verified', 'role:admin'])->prefix('admin')->name('ad
     Route::get('/pos/order-updates', [PosController::class, 'getOrderUpdates'])->name('pos.order-updates');
     Route::get('/pos/menu-data', [PosController::class, 'getMenuData'])->name('pos.menu-data');
     Route::get('/pos/order-data', [PosController::class, 'getOrderData'])->name('pos.order-data');
-    
-    // ==================== KITCHEN ROUTES ====================
-    Route::prefix('kitchen')->name('kitchen.')->group(function () {
-        // Main kitchen display
-        Route::get('/', [KitchenController::class, 'index'])->name('index');
-        
-        // Polling and real-time
-        Route::get('/poll', [KitchenController::class, 'poll'])->name('poll');
-        Route::get('/check-new', [KitchenController::class, 'checkNewOrders'])->name('check-new');
-        Route::get('/test-alarm', [KitchenController::class, 'testAlarm'])->name('test-alarm');
-        
-        // Order status updates
-        Route::put('/order/{sale}/status', [KitchenController::class, 'updateStatus'])->name('update-status');
-        Route::put('/item/{saleItem}/status', [KitchenController::class, 'updateItemStatus'])->name('update-item-status');
-        
-        // Kitchen actions
-        Route::post('/orders/{order}/start', [KitchenController::class, 'startPreparing'])->name('start');
-        Route::post('/orders/{order}/ready', [KitchenController::class, 'markReady'])->name('ready');
-        Route::post('/orders/{order}/complete', [KitchenController::class, 'markComplete'])->name('complete');
-    });
     
     // ==================== FOODS MANAGEMENT ====================
     // Page route (renders the React page)
@@ -120,9 +104,51 @@ Route::middleware(['auth', 'verified', 'role:admin'])->prefix('admin')->name('ad
     Route::get('/roles', function () {
         return Inertia::render('Admin/Roles/Index');
     })->name('roles.index');
-    Route::get('/inventory', function () {
-        return Inertia::render('Admin/Inventory/Index');
-    })->name('inventory.index');
+    Route::prefix('inventory')->name('inventory.')->group(function () {
+        Route::get('/', [InventoryController::class, 'index'])->name('index');
+        
+        // Ingredients API
+        Route::get('/ingredients', [InventoryController::class, 'getIngredients'])->name('ingredients');
+        Route::post('/ingredients', [InventoryController::class, 'storeIngredient'])->name('ingredients.store');
+        Route::put('/ingredients/{ingredient}', [InventoryController::class, 'updateIngredient'])->name('ingredients.update');
+        Route::delete('/ingredients/{ingredient}', [InventoryController::class, 'deleteIngredient'])->name('ingredients.delete');
+        Route::post('/bulk-update-stock', [InventoryController::class, 'bulkUpdateStock'])->name('bulk-update-stock');
+        
+        // Recipes
+        Route::get('/items-with-recipes', [InventoryController::class, 'getItemsWithRecipes'])->name('items-with-recipes');
+        Route::get('/items/{item}/recipe', [InventoryController::class, 'getItemRecipe'])->name('item-recipe');
+        Route::post('/items/{item}/recipe', [InventoryController::class, 'saveRecipe'])->name('save-recipe');
+        Route::get('/items/{item}/check-availability', [InventoryController::class, 'checkAvailability'])->name('check-availability');
+        
+        // Stock Management
+        Route::post('/update-stock', [InventoryController::class, 'updateStock'])->name('update-stock');
+        
+        // Reports
+        Route::get('/reports/usage', [InventoryReportController::class, 'usageReport'])->name('reports.usage');
+        Route::get('/reports/waste', [InventoryReportController::class, 'wasteReport'])->name('reports.waste');
+        Route::get('/reports/valuation', [InventoryReportController::class, 'valuation'])->name('reports.valuation');
+        Route::get('/reports/forecasting', [InventoryReportController::class, 'forecasting'])->name('reports.forecasting');
+        
+        // Purchase Orders
+        Route::get('/purchase-orders', [PurchaseOrderController::class, 'index'])->name('purchase-orders');
+        Route::post('/purchase-orders', [PurchaseOrderController::class, 'store'])->name('purchase-orders.store');
+        Route::get('/purchase-orders/{purchaseOrder}', [PurchaseOrderController::class, 'show'])->name('purchase-orders.show');
+        Route::put('/purchase-orders/{purchaseOrder}', [PurchaseOrderController::class, 'update'])->name('purchase-orders.update');
+        Route::post('/purchase-orders/{purchaseOrder}/receive', [PurchaseOrderController::class, 'receive'])->name('purchase-orders.receive');
+        Route::delete('/purchase-orders/{purchaseOrder}', [PurchaseOrderController::class, 'destroy'])->name('purchase-orders.destroy');
+        
+        // Suppliers
+        Route::get('/suppliers', [SupplierController::class, 'index'])->name('suppliers');
+        Route::post('/suppliers', [SupplierController::class, 'store'])->name('suppliers.store');
+        Route::put('/suppliers/{supplier}', [SupplierController::class, 'update'])->name('suppliers.update');
+        Route::delete('/suppliers/{supplier}', [SupplierController::class, 'destroy'])->name('suppliers.destroy');
+        
+        // Alerts
+        Route::get('/low-stock-alerts', [InventoryController::class, 'getLowStockAlerts'])->name('low-stock-alerts');
+        
+        // Migration
+        Route::post('/migrate-items', [InventoryController::class, 'migrateItems'])->name('migrate-items');
+    });
     Route::get('/settings', function () {
         return Inertia::render('Admin/Settings/Index');
     })->name('settings.index');
@@ -147,10 +173,26 @@ Route::middleware(['auth', 'verified', 'role:resto,admin'])->prefix('cashier')->
     Route::get('/pos/order-data', [PosController::class, 'getOrderData'])->name('cashier.pos.order-data');
 });
 
-// Kitchen role redirects to admin/kitchen
-Route::middleware(['auth', 'verified', 'role:kitchen,admin'])->prefix('kitchen')->group(function () {
-    Route::get('/', function () {
-        return redirect('/admin/kitchen');
+// ==================== KITCHEN ROUTES ====================
+// Kitchen staff and administrators can access the kitchen display
+Route::middleware(['auth', 'verified', 'role:kitchen,admin'])->prefix('admin')->name('admin.')->group(function () {
+    Route::prefix('kitchen')->name('kitchen.')->group(function () {
+        // Main kitchen display
+        Route::get('/', [KitchenController::class, 'index'])->name('index');
+        
+        // Polling and real-time
+        Route::get('/poll', [KitchenController::class, 'poll'])->name('poll');
+        Route::get('/check-new', [KitchenController::class, 'checkNewOrders'])->name('check-new');
+        Route::get('/test-alarm', [KitchenController::class, 'testAlarm'])->name('test-alarm');
+        
+        // Order status updates
+        Route::put('/order/{sale}/status', [KitchenController::class, 'updateStatus'])->name('update-status');
+        Route::put('/item/{saleItem}/status', [KitchenController::class, 'updateItemStatus'])->name('update-item-status');
+        
+        // Kitchen actions
+        Route::post('/orders/{order}/start', [KitchenController::class, 'startPreparing'])->name('start');
+        Route::post('/orders/{order}/ready', [KitchenController::class, 'markReady'])->name('ready');
+        Route::post('/orders/{order}/complete', [KitchenController::class, 'markComplete'])->name('complete');
     });
 });
 

@@ -32,7 +32,7 @@ class FoodCategoryController extends Controller
                 ];
             });
             
-        $items = Item::with('category')
+        $items = Item::with(['category', 'ingredients'])
             ->orderBy('category_id')
             ->orderBy('sort_order', 'asc')
             ->orderBy('name')
@@ -51,6 +51,21 @@ class FoodCategoryController extends Controller
                     'low_stock_threshold' => $item->low_stock_threshold ?? 10,
                     'sort_order' => $item->sort_order ?? 999,
                     'image' => $item->image,
+                    'pricing_type' => $item->pricing_type ?? 'single',
+                    'price_solo' => $item->price_solo ? (float)$item->price_solo : null,
+                    'price_whole' => $item->price_whole ? (float)$item->price_whole : null,
+                    'has_recipe' => (bool)$item->has_recipe,
+                    'ingredients' => $item->ingredients->map(function($ing) {
+                        return [
+                            'id' => $ing->id,
+                            'name' => $ing->name,
+                            'quantity_required' => (float)$ing->pivot->quantity_required,
+                            'unit' => $ing->pivot->unit ?? $ing->unit,
+                            'notes' => $ing->pivot->notes,
+                            'cost_per_unit' => (float)$ing->cost_per_unit,
+                            'quantity' => (float)$ing->quantity,
+                        ];
+                    }),
                 ];
             });
         

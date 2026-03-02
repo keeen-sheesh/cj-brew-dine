@@ -85,18 +85,16 @@ export default function AdminLayout({ children, auth }) {
             {/* CSRF Token Meta Tag - Add this for forms and AJAX */}
             <meta name="csrf-token" content={document.querySelector('meta[name="csrf-token"]')?.content || ''} />
             
-            {/* Burger Menu Button */}
-            {!sidebarOpen && (
-                <button
-                    className="fixed top-4 left-4 z-50 p-2 bg-white rounded-lg shadow-lg lg:hidden"
-                    onClick={() => setSidebarOpen(true)}
-                >
-                    <Menu className="w-6 h-6 text-gray-700" />
-                </button>
-            )}
+            {/* Hamburger Menu Button - Toggle sidebar */}
+            <button
+                className="fixed top-4 left-4 z-50 p-2 bg-white rounded-lg shadow-lg"
+                onClick={() => setSidebarOpen(!sidebarOpen)}
+            >
+                <Menu className="w-6 h-6 text-gray-700" />
+            </button>
             
             {/* Sidebar */}
-            <aside className={`fixed inset-y-0 left-0 z-40 w-64 bg-white shadow-xl transform transition-transform duration-300 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0`}>
+            <aside className={`fixed inset-y-0 left-0 z-40 w-64 bg-white shadow-xl transform transition-transform duration-300 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
                 <div className="flex flex-col h-full">
                     {/* Sidebar Header */}
                     <div className="p-6 border-b">
@@ -114,12 +112,6 @@ export default function AdminLayout({ children, auth }) {
                                     <p className="text-xs text-gray-500">Restobar System</p>
                                 </div>
                             </div>
-                            <button
-                                className="lg:hidden p-1 hover:bg-gray-100 rounded"
-                                onClick={() => setSidebarOpen(false)}
-                            >
-                                <X className="w-5 h-5 text-gray-600" />
-                            </button>
                         </div>
                         
                         {/* User Info */}

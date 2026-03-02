@@ -17,6 +17,13 @@ class CheckRole
             return redirect()->route('login');
         }
         
+        // DEBUG: log roles passed to middleware
+        \Log::info('CheckRole middleware', [
+            'requested_uri' => $request->path(),
+            'user_role' => $user->role,
+            'roles_param' => $roles,
+        ]);
+        
         // Check if user has any of the required roles
         foreach ($roles as $role) {
             if ($user->hasRole($role)) {

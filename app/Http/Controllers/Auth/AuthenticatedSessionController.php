@@ -32,6 +32,10 @@ class AuthenticatedSessionController extends Controller
         $request->authenticate();
         $request->session()->regenerate();
 
+        // clear any previous intended URL so we don't accidentally send
+        // an admin back to the cashier if they tried to open that page earlier
+        $request->session()->forget('url.intended');
+
         $user = Auth::user();
         
         // DEBUG: Add logging to see what's happening
@@ -52,12 +56,12 @@ class AuthenticatedSessionController extends Controller
         
         if ($user->role === 'resto' || $user->role === 'resto_admin') {
             \Log::info('Redirecting to cashier');
-            return redirect('/cashier');
+            return redirect('/cashier/pos');
         }
         
         if ($user->role === 'kitchen') {
             \Log::info('Redirecting to kitchen');
-            return redirect('/kitchen');
+            return redirect()->route('admin.kitchen.index');
         }
         
         if ($user->role === 'customer') {

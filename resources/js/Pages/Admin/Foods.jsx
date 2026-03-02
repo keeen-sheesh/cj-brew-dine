@@ -2,6 +2,7 @@
 import { Head, usePage } from '@inertiajs/react';
 import { useState, useEffect, useRef } from 'react';
 import AdminLayout from '@/Layouts/AdminLayout';
+import FoodItemForm from '@/Pages/Admin/FoodItems/Form';
 import {
   Tag, Utensils, Calendar, CheckCircle, XCircle,
   Plus, Edit, Trash2, Search, Filter, SortAsc,
@@ -13,7 +14,6 @@ import {
   CupSoda, Beer, Wine, Milk
 } from 'lucide-react';
 
-// Get image URL helper function
 const getImageUrl = (imagePath) => {
     if (!imagePath) return null;
     if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
@@ -40,13 +40,11 @@ export default function Foods({
     const [filterCategory, setFilterCategory] = useState('');
     const [sortBy, setSortBy] = useState('name');
     
-    // Pagination states
     const [currentPage, setCurrentPage] = useState(1);
     const [itemsPerPage, setItemsPerPage] = useState(9);
     const [categoryPage, setCategoryPage] = useState(1);
     const [categoriesPerPage, setCategoriesPerPage] = useState(10);
     
-    // Modal states
     const [showAddCategoryModal, setShowAddCategoryModal] = useState(false);
     const [showAddItemModal, setShowAddItemModal] = useState(false);
     const [showEditCategoryModal, setShowEditCategoryModal] = useState(false);
@@ -55,7 +53,6 @@ export default function Foods({
     const [showImageModal, setShowImageModal] = useState(false);
     const [selectedImage, setSelectedImage] = useState(null);
     
-    // Form states
     const [newCategory, setNewCategory] = useState({ 
         name: '', 
         description: '',
@@ -121,6 +118,11 @@ export default function Foods({
         active_categories: active_categories || 0,
         available_items: available_items || 0
     });
+
+    // FoodItemForm state
+    const [showItemForm, setShowItemForm] = useState(false);
+    const [selectedItem, setSelectedItem] = useState(null);
+    const [ingredients, setIngredients] = useState([]);
 
     // Image file input refs
     const addImageInputRef = useRef(null);
@@ -303,6 +305,70 @@ export default function Foods({
             showNotification('Failed to refresh data', 'error');
         } finally {
             setRefreshing(false);
+        }
+    };
+
+    // Fetch ingredients for FoodItemForm
+    const fetchIngredients = async () => {
+        try {
+            const response = await fetch('/admin/inventory/ingredients', {
+                headers: {
+                    'Accept': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                }
+            });
+            const data = await response.json();
+            if (data.success || data.ingredients) {
+                setIngredients(data.ingredients || []);
+            }
+        } catch (error) {
+            console.error('Failed to fetch ingredients:', error);
+        }
+    };
+
+    // Load ingredients on mount
+    useEffect(() => {
+        fetchIngredients();
+    }, []);
+
+    // Handle save item from FoodItemForm
+    const handleSaveItem = async (formData) => {
+        const url = selectedItem 
+            ? `/admin/food-items/${selectedItem.id}`
+            : '/admin/food-items';
+        
+        const method = selectedItem ? 'POST' : 'POST'; // POST with _method=PUT for update
+        
+        if (selectedItem) {
+            formData.append('_method', 'PUT');
+        }
+
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'X-CSRF-TOKEN': getCsrfToken(),
+                    'Accept': 'application/json',
+                },
+                body: formData
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                if (selectedItem) {
+                    setItems(items.map(item => item.id === data.item.id ? data.item : item));
+                } else {
+                    setItems([...items, data.item]);
+                }
+                setShowItemForm(false);
+                setSelectedItem(null);
+                showNotification(selectedItem ? 'Item updated successfully' : 'Item added successfully');
+            } else {
+                showNotification(data.message || 'Failed to save item', 'error');
+            }
+        } catch (error) {
+            showNotification('Error saving item', 'error');
         }
     };
     
@@ -1204,7 +1270,10 @@ export default function Foods({
                                     <p className="text-sm text-gray-500 mt-1">Manage all your food and beverage items</p>
                                 </div>
                                 <button
-                                    onClick={() => setShowAddItemModal(true)}
+                                    onClick={() => {
+                                        setSelectedItem(null);
+                                        setShowItemForm(true);
+                                    }}
                                     className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors text-sm font-medium flex items-center"
                                 >
                                     <Plus className="h-4 w-4 mr-2" />
@@ -1368,7 +1437,10 @@ export default function Foods({
                                                         
                                                         <div className="flex gap-1">
                                                             <button
-                                                                onClick={() => openEditItemModal(item)}
+                                                                onClick={() => {
+                                                                    setSelectedItem(item);
+                                                                    setShowItemForm(true);
+                                                                }}
                                                                 className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
                                                                 title="Edit"
                                                             >
@@ -2150,6 +2222,20 @@ export default function Foods({
                     animation: scale-in 0.2s ease-out;
                 }
             `}</style>
+
+            {/* FoodItemForm Modal */}
+            {showItemForm && (
+                <FoodItemForm
+                    item={selectedItem}
+                    categories={categories}
+                    ingredients={ingredients}
+                    onSave={handleSaveItem}
+                    onClose={() => {
+                        setShowItemForm(false);
+                        setSelectedItem(null);
+                    }}
+                />
+            )}
         </AdminLayout>
     );
 }
