@@ -32,7 +32,16 @@ class AuthenticatedSessionController extends Controller
         $request->authenticate();
         $request->session()->regenerate();
 
+        // clear any previous intended URL so we don't accidentally send
+        // an admin back to the cashier if they tried to open that page earlier
+        $request->session()->forget('url.intended');
+
         $user = Auth::user();
+
+        $user->forceFill([
+            'last_login_at' => now(),
+            'is_active' => true,
+        ])->save();
         
         // DEBUG: Add logging to see what's happening
         \Log::info('=== LOGIN SUCCESS ===', [
@@ -44,16 +53,20 @@ class AuthenticatedSessionController extends Controller
             'isKitchen' => $user->isKitchen(),
         ]);
         
-        if ($user->role === 'admin') {
+        // SIMPLE REDIRECT - Debug version
+        if ($user->role === 'admin' || $user->role === 'resto_admin') {
+            \Log::info('Redirecting to manager dashboard');
             return redirect()->route('admin.dashboard');
         }
         
-        if ($user->role === 'resto' || $user->role === 'resto_admin') {
-            return redirect('/cashier');
+        if ($user->role === 'resto' || $user->role === 'cashier') {
+            \Log::info('Redirecting to cashier dashboard');
+            return redirect('/cashier/dashboard');
         }
         
         if ($user->role === 'kitchen') {
-            return redirect('/kitchen');
+            \Log::info('Redirecting to kitchen');
+            return redirect()->route('admin.kitchen.index');
         }
         
         if ($user->role === 'customer') {

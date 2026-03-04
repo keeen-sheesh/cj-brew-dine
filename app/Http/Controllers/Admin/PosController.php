@@ -5,7 +5,10 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Category;
+use App\Models\IngredientStock;
+use App\Models\InventoryPool;
 use App\Models\Item;
+use App\Models\InventoryTransaction;
 use App\Models\PaymentMethod;
 use App\Models\Sale;
 use App\Models\SaleItem;
@@ -15,20 +18,15 @@ use Inertia\Inertia;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Auth;
 
 class PosController extends Controller
 {
+    private const LOW_STOCK_SERVING_THRESHOLD = 3;
+
     public function index(Request $request)
     {
-        $categories = Category::with(['items' => function($query) {
-            $query->where('is_available', true)
-                  ->orderBy('sort_order', 'asc')
-                  ->orderBy('name');
-        }, 'items.itemSizes.size'])
-        ->where('is_active', true)
-        ->orderBy('sort_order', 'asc')
-        ->orderBy('name')
-        ->get();
+        $categories = $this->getPosCategories();
 
         // Format items with their sizes
         foreach ($categories as $category) {
@@ -95,29 +93,11 @@ class PosController extends Controller
                     return $itemName;
                 })->implode(', ');
                 
-                // Check if order has kitchen items - FIXED for boolean casting
-                $hasKitchenItems = false;
-                foreach ($order->saleItems as $saleItem) {
-                    if ($saleItem->item && $saleItem->item->category) {
-                        $category = $saleItem->item->category;
-                        
-                        // Check for is_kitchen_category (now cast to boolean in model)
-                        if (isset($category->is_kitchen_category) && $category->is_kitchen_category === true) {
-                            $hasKitchenItems = true;
-                            break;
-                        }
-                    }
-                }
-                
-                // Check if hotel order
-                $isHotel = $order->paymentMethod && $order->paymentMethod->name === 'Hotel';
-                
-                $order->items_list = $itemsList;
-                $order->formatted_total = '₱' . number_format($order->total_amount, 2);
-                $order->formatted_subtotal = '₱' . number_format($order->subtotal ?? 0, 2);
-                $order->formatted_discount = '₱' . number_format($order->discount_amount ?? 0, 2);
-                $order->formatted_service_charge = $order->service_charge > 0 ? '₱' . number_format($order->service_charge, 2) : null;
-                $order->formatted_time = $order->created_at->format('h:i A');
+                // check against the database instead of looping manually; this
+                // avoids edge cases where the category relation might be null or
+                // the value has an unexpected type
+                $hasKitchenItems = $this->saleHasKitchenItems((int) $order->id);
+
                 $order->has_kitchen_items = $hasKitchenItems;
                 $order->kitchen_status = $order->kitchen_status;
                 $order->payment_method_name = $order->paymentMethod ? $order->paymentMethod->name : null;
@@ -172,8 +152,13 @@ class PosController extends Controller
     // 🔥 REAL-TIME: Get menu updates (2-second polling with cache check)
     public function getMenuUpdates(Request $request)
     {
-        $lastUpdate = $request->get('last_update', 0);
-        $currentUpdate = cache()->get('menu_last_updated', 0);
+        $lastUpdate = (int) $request->get('last_update', 0);
+        $currentUpdate = (int) cache()->get('menu_last_updated', 0);
+
+        // Accept legacy millisecond timestamps from the frontend and normalize to seconds.
+        if ($lastUpdate > 9999999999) {
+            $lastUpdate = (int) floor($lastUpdate / 1000);
+        }
 
         // If no changes since last check, return early
         if ($lastUpdate > 0 && $currentUpdate <= $lastUpdate) {
@@ -184,15 +169,7 @@ class PosController extends Controller
             ]);
         }
 
-        $categories = Category::with(['items' => function($query) {
-            $query->where('is_available', true)
-                  ->orderBy('sort_order', 'asc')
-                  ->orderBy('name');
-        }, 'items.itemSizes.size'])
-        ->where('is_active', true)
-        ->orderBy('sort_order', 'asc')
-        ->orderBy('name')
-        ->get();
+        $categories = $this->getPosCategories();
 
         // Format items with their sizes
         foreach ($categories as $category) {
@@ -250,19 +227,8 @@ class PosController extends Controller
                 return $itemName;
             })->implode(', ');
             
-            // Check if order has kitchen items - FIXED for boolean casting
-            $hasKitchenItems = false;
-            foreach ($order->saleItems as $saleItem) {
-                if ($saleItem->item && $saleItem->item->category) {
-                    $category = $saleItem->item->category;
-                    
-                    // Check for is_kitchen_category (now cast to boolean in model)
-                    if (isset($category->is_kitchen_category) && $category->is_kitchen_category === true) {
-                        $hasKitchenItems = true;
-                        break;
-                    }
-                }
-            }
+            // Check if order has kitchen items using DB query
+            $hasKitchenItems = $this->saleHasKitchenItems((int) $order->id);
             
             // Get payment method name
             $paymentMethodName = $order->paymentMethod ? $order->paymentMethod->name : null;
@@ -322,40 +288,241 @@ class PosController extends Controller
     // 🔥 REAL-TIME: Full menu data for manual refresh
     public function getMenuData(Request $request)
     {
-        $categories = Category::with(['items' => function($query) {
-            $query->where('is_available', true)
-                  ->orderBy('sort_order', 'asc')
-                  ->orderBy('name');
-        }, 'items.itemSizes.size'])
-        ->where('is_active', true)
-        ->orderBy('sort_order', 'asc')
-        ->orderBy('name')
-        ->get();
-
-        // Format items with their sizes
-        foreach ($categories as $category) {
-            foreach ($category->items as $item) {
-                $item->sizes = $item->itemSizes->map(function($itemSize) {
-                    return [
-                        'id' => $itemSize->id,
-                        'size_id' => $itemSize->size_id,
-                        'size_name' => $itemSize->size->name,
-                        'display_name' => $itemSize->size->display_name,
-                        'price' => (float) $itemSize->price,
-                    ];
-                });
-                $item->has_sizes = $item->sizes->count() > 0;
-                $item->pricing_type = $item->pricing_type ?? 'single';
-                $item->price_solo = $item->price_solo ? (float)$item->price_solo : null;
-                $item->price_whole = $item->price_whole ? (float)$item->price_whole : null;
-            }
-        }
+        $categories = $this->getPosCategories();
 
         return response()->json([
             'success' => true,
             'categories' => $categories,
             'menu_last_updated' => cache()->get('menu_last_updated', 0),
         ]);
+    }
+
+    private function getPosCategories()
+    {
+        $categories = Category::with(['items' => function($query) {
+            $query->with(['ingredients.stocks.pool'])
+                ->where('is_available', true)
+                ->orderBy('sort_order', 'asc')
+                ->orderBy('name');
+        }])
+        ->where('is_active', true)
+        ->orderBy('sort_order', 'asc')
+        ->orderBy('name')
+        ->get();
+
+        return $categories->map(function ($category) {
+            $items = $category->items->map(function ($item) use ($category) {
+                $poolCode = $this->resolveItemPoolCode($item, $category);
+                $inventory = $this->buildInventorySnapshot($item, $poolCode);
+
+                $item->setAttribute('inventory_pool_code', $poolCode);
+                $item->setAttribute('inventory_status', $inventory['status']);
+                $item->setAttribute('inventory_status_label', $inventory['label']);
+                $item->setAttribute('inventory_available_servings', $inventory['available_servings']);
+                $item->unsetRelation('ingredients');
+
+                return $item;
+            });
+
+            $category->setRelation('items', $items);
+
+            return $category;
+        });
+    }
+
+    private function resolveItemPoolCode(Item $item, ?Category $category = null): string
+    {
+        if (!empty($item->inventory_pool_code)) {
+            return (string) $item->inventory_pool_code;
+        }
+
+        $isKitchenCategory = $category
+            ? (bool) $category->is_kitchen_category
+            : (bool) optional($item->category)->is_kitchen_category;
+
+        return $isKitchenCategory ? InventoryPool::KITCHEN : InventoryPool::RESTO;
+    }
+
+    private function availableIngredientQuantityForPool($ingredient, string $poolCode): float
+    {
+        return (float) optional(
+            $ingredient->stocks->first(fn ($stock) => optional($stock->pool)->code === $poolCode)
+        )->quantity;
+    }
+
+    private function buildInventorySnapshot(Item $item, string $poolCode): array
+    {
+        if ($item->ingredients->isEmpty()) {
+            return [
+                'status' => 'no_recipe',
+                'label' => 'No Recipe',
+                'available_servings' => null,
+            ];
+        }
+
+        $availableServings = null;
+
+        foreach ($item->ingredients as $ingredient) {
+            $required = (float) ($ingredient->pivot->quantity_required ?? 0);
+            if ($required <= 0) {
+                continue;
+            }
+
+            $available = $this->availableIngredientQuantityForPool($ingredient, $poolCode);
+            $requiredUnit = (string) ($ingredient->pivot->unit ?? $ingredient->unit ?? '');
+            $stockUnit = (string) ($ingredient->unit ?? '');
+            $requiredInStockUnit = $this->convertQuantity($required, $requiredUnit, $stockUnit);
+            $effectiveRequired = $requiredInStockUnit ?? $required;
+
+            if ($effectiveRequired <= 0) {
+                continue;
+            }
+
+            $servings = max(0, (int) floor($available / $effectiveRequired));
+            $availableServings = $availableServings === null
+                ? $servings
+                : min($availableServings, $servings);
+        }
+
+        if ($availableServings === null) {
+            return [
+                'status' => 'no_recipe',
+                'label' => 'No Recipe',
+                'available_servings' => null,
+            ];
+        }
+
+        if ($availableServings <= 0) {
+            return [
+                'status' => 'out',
+                'label' => 'Out of Stock',
+                'available_servings' => 0,
+            ];
+        }
+
+        if ($availableServings <= self::LOW_STOCK_SERVING_THRESHOLD) {
+            return [
+                'status' => 'low',
+                'label' => 'Low Stock',
+                'available_servings' => $availableServings,
+            ];
+        }
+
+        return [
+            'status' => 'in',
+            'label' => 'In Stock',
+            'available_servings' => $availableServings,
+        ];
+    }
+
+    private function validateOrderStockAvailability(array $items): array
+    {
+        $requestedByItem = [];
+
+        foreach ($items as $line) {
+            $itemId = (int) ($line['id'] ?? 0);
+            $qty = (int) ($line['quantity'] ?? 0);
+
+            if ($itemId <= 0 || $qty <= 0) {
+                continue;
+            }
+
+            $requestedByItem[$itemId] = ($requestedByItem[$itemId] ?? 0) + $qty;
+        }
+
+        if (empty($requestedByItem)) {
+            return [];
+        }
+
+        $menuItems = Item::with(['category', 'ingredients.stocks.pool'])
+            ->whereIn('id', array_keys($requestedByItem))
+            ->get()
+            ->keyBy('id');
+
+        $issues = [];
+
+        foreach ($requestedByItem as $itemId => $requestedQty) {
+            /** @var Item|null $item */
+            $item = $menuItems->get($itemId);
+            if (!$item) {
+                continue;
+            }
+
+            if ((bool) $item->is_available === false) {
+                $issues[] = [
+                    'type' => 'unavailable',
+                    'name' => (string) $item->name,
+                ];
+                continue;
+            }
+
+            $availability = $this->effectiveAvailabilityForItem($item);
+            $available = $availability['available'];
+
+            if ($available !== null && $requestedQty > $available) {
+                $issues[] = [
+                    'type' => 'insufficient',
+                    'name' => (string) $item->name,
+                    'requested' => (int) $requestedQty,
+                    'available' => (int) $available,
+                    'unit' => (string) $availability['unit'],
+                ];
+            }
+        }
+
+        return $issues;
+    }
+
+    private function effectiveAvailabilityForItem(Item $item): array
+    {
+        $poolCode = $this->resolveItemPoolCode($item, $item->category);
+        $inventory = $this->buildInventorySnapshot($item, $poolCode);
+        $servings = $inventory['available_servings'] ?? null;
+
+        if ($servings !== null) {
+            return [
+                'available' => max(0, (int) floor((float) $servings)),
+                'unit' => 'serving',
+            ];
+        }
+
+        if ($item->stock_quantity !== null) {
+            return [
+                'available' => max(0, (int) $item->stock_quantity),
+                'unit' => 'item',
+            ];
+        }
+
+        return [
+            'available' => null,
+            'unit' => 'item',
+        ];
+    }
+
+    private function formatOrderStockIssues(array $issues): string
+    {
+        $lines = ['Insufficient stock for requested items:'];
+
+        foreach ($issues as $issue) {
+            if (($issue['type'] ?? '') === 'unavailable') {
+                $lines[] = '- ' . $issue['name'] . ' is currently unavailable.';
+                continue;
+            }
+
+            $available = (int) ($issue['available'] ?? 0);
+            $unit = (string) ($issue['unit'] ?? 'item');
+            $unitLabel = $available === 1 ? $unit : $unit . 's';
+
+            $lines[] = sprintf(
+                '- %s: requested %d, available %d %s.',
+                (string) ($issue['name'] ?? 'Item'),
+                (int) ($issue['requested'] ?? 0),
+                $available,
+                $unitLabel
+            );
+        }
+
+        return implode("\n", $lines);
     }
 
     // 🔥 REAL-TIME: Full order data for manual refresh - FIXED for size items and boolean kitchen check
@@ -386,19 +553,8 @@ class PosController extends Controller
                 return $itemName;
             })->implode(', ');
             
-            // Check if order has kitchen items - FIXED for boolean casting
-            $hasKitchenItems = false;
-            foreach ($order->saleItems as $saleItem) {
-                if ($saleItem->item && $saleItem->item->category) {
-                    $category = $saleItem->item->category;
-                    
-                    // Check for is_kitchen_category (now cast to boolean in model)
-                    if (isset($category->is_kitchen_category) && $category->is_kitchen_category === true) {
-                        $hasKitchenItems = true;
-                        break;
-                    }
-                }
-            }
+            // Check if order has kitchen items using a dedicated query
+            $hasKitchenItems = $this->saleHasKitchenItems((int) $order->id);
             
             // Get payment method name
             $paymentMethodName = $order->paymentMethod ? $order->paymentMethod->name : null;
@@ -454,210 +610,300 @@ class PosController extends Controller
         ]);
     }
 
-    public function store(Request $request)
+    private function kitchenSaleItemsQuery(int $saleId)
     {
-        // Log the raw request first
-        Log::info('========== RAW REQUEST DATA ==========');
-        Log::info('All request data:', $request->all());
-        Log::info('room_number from request:', ['room_number' => $request->room_number]);
-        
-        try {
-            $validated = $request->validate([
-                'items' => 'required|array|min:1',
-                'items.*.id' => 'required|exists:items,id',
-                'items.*.quantity' => 'required|integer|min:1',
-                'items.*.price' => 'required|numeric|min:0',
-                'items.*.name' => 'required|string',
-                'items.*.notes' => 'nullable|string',
-                'items.*.size_id' => 'nullable|exists:sizes,id',
-                'order_type' => 'required|in:dine_in,takeout,delivery',
-                'customer_name' => 'nullable|string|max:255',
-                'room_number' => 'nullable|string|max:20',
-                'people_count' => 'required|integer|min:1|max:20',
-                'cards_presented' => 'required|integer|min:0|max:20',
-                'customer_phone' => 'nullable|string|max:20',
-                'customer_address' => 'nullable|string|max:500',
-                'notes' => 'nullable|string|max:1000',
-                'discount_type' => 'nullable|in:none,percentage,fixed',
-                'discount_value' => 'nullable|numeric|min:0',
-                'payment_method_id' => 'required|exists:payment_methods,id',
-            ]);
-
-            Log::info('========== AFTER VALIDATION ==========');
-            Log::info('validated room_number:', ['room_number' => $validated['room_number'] ?? null]);
-            Log::info('All validated data:', $validated);
-
-            DB::beginTransaction();
-
-            $subtotal = collect($validated['items'])->sum(function($item) {
-                return $item['price'] * $item['quantity'];
+        return SaleItem::where('sale_id', $saleId)
+            ->where(function ($query) {
+                $query->whereNotNull('kitchen_status')
+                    ->orWhereHas('item.category', function ($categoryQuery) {
+                        $categoryQuery->where('is_kitchen_category', 1);
+                    });
             });
-
-            // Check stock availability for all items
-            foreach ($validated['items'] as $item) {
-                $dbItem = Item::find($item['id']);
-                if ($dbItem && $dbItem->stock_quantity !== null) {
-                    if ($dbItem->stock_quantity < $item['quantity']) {
-                        throw new \Exception("Insufficient stock for {$dbItem->name}. Available: {$dbItem->stock_quantity}");
-                    }
-                }
-            }
-
-            // Card discount (20% per card)
-            $cardDiscount = 0;
-            if ($validated['cards_presented'] > 0 && $validated['people_count'] > 0) {
-                $cardDiscount = ($subtotal * 0.20) / $validated['people_count'] * $validated['cards_presented'];
-                $cardDiscount = round($cardDiscount, 2);
-            }
-
-            // Additional discount
-            $additionalDiscount = 0;
-            if (isset($validated['discount_type']) && $validated['discount_type'] !== 'none' && $validated['discount_value'] > 0) {
-                if ($validated['discount_type'] === 'percentage') {
-                    $additionalDiscount = ($subtotal * $validated['discount_value']) / 100;
-                } elseif ($validated['discount_type'] === 'fixed') {
-                    $additionalDiscount = $validated['discount_value'];
-                }
-                $additionalDiscount = round($additionalDiscount, 2);
-            }
-
-            $totalDiscount = $cardDiscount + $additionalDiscount;
-            $afterDiscountSubtotal = $subtotal - $totalDiscount;
-
-            // Calculate service charge if hotel payment method
-            $serviceCharge = 0;
-            $paymentMethod = PaymentMethod::find($validated['payment_method_id']);
-            if ($paymentMethod && $paymentMethod->name === 'Hotel') {
-                $serviceCharge = round($afterDiscountSubtotal * 0.10, 2);
-            }
-
-            $totalAmount = $afterDiscountSubtotal + $serviceCharge;
-
-            // Check if order has kitchen items - FIXED for boolean casting
-            $hasKitchenItems = false;
-            
-            foreach ($validated['items'] as $item) {
-                $itemModel = Item::with('category')->find($item['id']);
-                
-                if ($itemModel && $itemModel->category) {
-                    // Check for is_kitchen_category (now cast to boolean in model)
-                    if (isset($itemModel->category->is_kitchen_category) && $itemModel->category->is_kitchen_category === true) {
-                        $hasKitchenItems = true;
-                        break;
-                    }
-                }
-            }
-
-            // ============ FIXED: Only set kitchen_status for kitchen items ============
-            $initialStatus = 'pending';
-            // Only set kitchen_status to pending if there are kitchen items, otherwise null
-            $initialKitchenStatus = $hasKitchenItems ? 'pending' : null;
-            $paidAt = null;
-
-            Log::info('Order status:', [
-                'initial_status' => $initialStatus,
-                'initial_kitchen_status' => $initialKitchenStatus,
-                'has_kitchen_items' => $hasKitchenItems
-            ]);
-
-            $sale = Sale::create([
-                'user_id' => auth()->id(),
-                'subtotal' => $subtotal,
-                'discount_amount' => $totalDiscount,
-                'service_charge' => $serviceCharge,
-                'total_amount' => $totalAmount,
-                'status' => $initialStatus,
-                'kitchen_status' => $initialKitchenStatus,
-                'order_type' => $validated['order_type'],
-                'people_count' => $validated['people_count'],
-                'cards_presented' => $validated['cards_presented'],
-                'customer_name' => $validated['customer_name'] ?? null,
-                'room_number' => $validated['room_number'] ?? null,
-                'customer_phone' => $validated['customer_phone'] ?? null,
-                'customer_address' => $validated['customer_address'] ?? null,
-                'notes' => $validated['notes'] ?? null,
-                'discount_type' => $validated['discount_type'] ?? 'none',
-                'discount_value' => $validated['discount_value'] ?? 0,
-                'payment_method_id' => $validated['payment_method_id'],
-                'paid_at' => $paidAt,
-            ]);
-
-            foreach ($validated['items'] as $item) {
-                $itemModel = Item::with('category')->find($item['id']);
-                
-                // Check if this specific item is a kitchen item
-                $isKitchenItem = false;
-                if ($itemModel && $itemModel->category) {
-                    if (isset($itemModel->category->is_kitchen_category) && $itemModel->category->is_kitchen_category === true) {
-                        $isKitchenItem = true;
-                    }
-                }
-                
-                $saleItemData = [
-                    'sale_id' => $sale->id,
-                    'item_id' => $item['id'],
-                    'quantity' => $item['quantity'],
-                    'unit_price' => $item['price'],
-                    'total_price' => $item['price'] * $item['quantity'],
-                    'special_instructions' => $item['notes'] ?? null,
-                ];
-                
-                if (isset($item['size_id'])) {
-                    $saleItemData['size_id'] = $item['size_id'];
-                }
-                
-                // Only set kitchen_status for kitchen items
-                if ($isKitchenItem) {
-                    $saleItemData['kitchen_status'] = 'pending';
-                }
-                
-                SaleItem::create($saleItemData);
-
-                if ($itemModel && $itemModel->stock_quantity !== null) {
-                    $itemModel->decrement('stock_quantity', $item['quantity']);
-                }
-            }
-
-            DB::commit();
-
-            // Update menu last updated timestamp
-            cache()->put('menu_last_updated', time(), 3600);
-
-            $successMessage = '✅ Order #' . $sale->id . ' placed successfully!';
-            if ($hasKitchenItems) {
-                $successMessage .= " Kitchen items sent to kitchen.";
-            } else {
-                $successMessage .= " No kitchen items.";
-            }
-            if ($serviceCharge > 0) {
-                $successMessage .= " Hotel service charge (10%) applied.";
-            }
-
-            return redirect()->route('admin.pos.index')->with([
-                'success' => $successMessage,
-                'order_data' => [
-                    'order_id' => $sale->id,
-                    'total' => $totalAmount,
-                    'discount' => $totalDiscount,
-                    'service_charge' => $serviceCharge,
-                    'order_number' => 'ORD-' . str_pad($sale->id, 6, '0', STR_PAD_LEFT),
-                    'has_kitchen_items' => $hasKitchenItems,
-                ]
-            ]);
-
-        } catch (\Exception $e) {
-            DB::rollBack();
-            
-            Log::error('========== ORDER FAILED ==========');
-            Log::error('Error: ' . $e->getMessage());
-            Log::error('Trace: ' . $e->getTraceAsString());
-            
-            return redirect()->route('admin.pos.index')->with([
-                'error' => '❌ Failed to place order: ' . $e->getMessage()
-            ]);
-        }
     }
 
+    private function saleHasKitchenItems(int $saleId): bool
+    {
+        return $this->kitchenSaleItemsQuery($saleId)->exists();
+    }
+
+    private function isKitchenSaleItem(SaleItem $saleItem): bool
+    {
+        if (!is_null($saleItem->kitchen_status)) {
+            return true;
+        }
+
+        return (bool) optional(optional($saleItem->item)->category)->is_kitchen_category;
+    }
+
+    private function kitchenItemIdsForOrder(array $itemIds): array
+    {
+        if (empty($itemIds)) {
+            return [];
+        }
+
+        $hasKitchenCategories = Category::where('is_kitchen_category', 1)->exists();
+
+        if (!$hasKitchenCategories) {
+            Log::warning('No kitchen categories configured; treating ordered items as kitchen items.', [
+                'item_ids' => $itemIds,
+            ]);
+
+            return array_values(array_unique(array_map('intval', $itemIds)));
+        }
+
+        return Item::whereIn('id', $itemIds)
+            ->whereHas('category', function($query) {
+                $query->where('is_kitchen_category', 1);
+            })
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->toArray();
+    }
+
+    public function store(Request $request)
+{
+    // Log the raw request first
+    Log::info('========== POS ORDER CREATION STARTED ==========');
+    Log::info('All request data:', $request->all());
+    Log::info('room_number from request:', ['room_number' => $request->room_number]);
+    
+    try {
+        $validated = $request->validate([
+            'items' => 'required|array|min:1',
+            'items.*.id' => 'required|exists:items,id',
+            'items.*.quantity' => 'required|integer|min:1',
+            'items.*.price' => 'required|numeric|min:0',
+            'items.*.name' => 'required|string',
+            'items.*.notes' => 'nullable|string',
+            'order_type' => 'required|in:dine_in,takeout,delivery',
+            'customer_name' => 'nullable|string|max:255',
+            'room_number' => 'nullable|string|max:20',
+            'people_count' => 'required|integer|min:1|max:20',
+            'cards_presented' => 'required|integer|min:0|max:20',
+            'customer_phone' => 'nullable|string|max:20',
+            'customer_address' => 'nullable|string|max:500',
+            'notes' => 'nullable|string|max:1000',
+            'discount_type' => 'nullable|in:none,percentage,fixed',
+            'discount_value' => 'nullable|numeric|min:0',
+            'payment_method_id' => 'required|exists:payment_methods,id',
+        ]);
+
+        Log::info('========== AFTER VALIDATION ==========');
+        Log::info('validated room_number:', ['room_number' => $validated['room_number'] ?? null]);
+        Log::info('All validated data:', $validated);
+
+        $stockIssues = $this->validateOrderStockAvailability($validated['items']);
+        if (!empty($stockIssues)) {
+            throw new \Exception($this->formatOrderStockIssues($stockIssues));
+        }
+
+        DB::beginTransaction();
+
+        $subtotal = collect($validated['items'])->sum(function($item) {
+            return $item['price'] * $item['quantity'];
+        });
+
+        Log::info('Subtotal calculated:', ['subtotal' => $subtotal]);
+
+        // Card discount (20% per card)
+        $cardDiscount = 0;
+        if ($validated['cards_presented'] > 0 && $validated['people_count'] > 0) {
+            $cardDiscount = ($subtotal * 0.20) / $validated['people_count'] * $validated['cards_presented'];
+            $cardDiscount = round($cardDiscount, 2);
+        }
+
+        // Additional discount
+        $additionalDiscount = 0;
+        if (isset($validated['discount_type']) && $validated['discount_type'] !== 'none' && $validated['discount_value'] > 0) {
+            if ($validated['discount_type'] === 'percentage') {
+                $additionalDiscount = ($subtotal * $validated['discount_value']) / 100;
+            } elseif ($validated['discount_type'] === 'fixed') {
+                $additionalDiscount = $validated['discount_value'];
+            }
+            $additionalDiscount = round($additionalDiscount, 2);
+        }
+
+        $totalDiscount = $cardDiscount + $additionalDiscount;
+        $totalAmount = $subtotal - $totalDiscount;
+
+        // determine which item IDs are considered kitchen items using a single query
+        $itemIds = collect($validated['items'])->pluck('id')->toArray();
+        
+        Log::info('Item IDs from order:', ['item_ids' => $itemIds]);
+        
+        $kitchenItemIds = $this->kitchenItemIdsForOrder($itemIds);
+
+        $hasKitchenItems = count($kitchenItemIds) > 0;
+        
+        // Get category info for each item to debug
+        $itemsWithCategories = Item::with('category')
+            ->whereIn('id', $itemIds)
+            ->get()
+            ->map(function($item) {
+                return [
+                    'id' => $item->id,
+                    'name' => $item->name,
+                    'category' => $item->category ? $item->category->name : 'no category',
+                    'is_kitchen_category' => $item->category ? $item->category->is_kitchen_category : false
+                ];
+            });
+
+        Log::info('Items with categories:', ['items' => $itemsWithCategories->toArray()]);
+        Log::info('Kitchen item detection', [
+            'item_ids' => $itemIds,
+            'kitchen_item_ids' => $kitchenItemIds,
+            'has_kitchen_items' => $hasKitchenItems,
+        ]);
+
+        // Determine initial status based on kitchen items
+        $initialStatus = $hasKitchenItems ? 'pending' : 'completed';
+        $initialKitchenStatus = $hasKitchenItems ? 'pending' : null;
+
+        Log::info('Initial status determination:', [
+            'has_kitchen_items' => $hasKitchenItems,
+            'initialStatus' => $initialStatus,
+            'initialKitchenStatus' => $initialKitchenStatus
+        ]);
+
+        // Log before creating sale
+        Log::info('========== BEFORE SALE CREATE ==========');
+        Log::info('room_number to save:', ['room_number' => $validated['room_number'] ?? null]);
+
+        $sale = Sale::create([
+            'user_id' => Auth::id(),
+            'subtotal' => $subtotal,
+            'discount_amount' => $totalDiscount,
+            'total_amount' => $totalAmount,
+            'status' => $initialStatus,
+            'kitchen_status' => $initialKitchenStatus,
+            'order_type' => $validated['order_type'],
+            'people_count' => $validated['people_count'],
+            'cards_presented' => $validated['cards_presented'],
+            'customer_name' => $validated['customer_name'] ?? null,
+            'room_number' => $validated['room_number'] ?? null,
+            'customer_phone' => $validated['customer_phone'] ?? null,
+            'customer_address' => $validated['customer_address'] ?? null,
+            'notes' => $validated['notes'] ?? null,
+            'discount_type' => $validated['discount_type'] ?? 'none',
+            'discount_value' => $validated['discount_value'] ?? 0,
+            'payment_method_id' => $validated['payment_method_id'],
+            'paid_at' => !$hasKitchenItems ? now() : null,
+        ]);
+
+        // Log after creating sale
+        Log::info('========== AFTER SALE CREATE ==========');
+        Log::info('Created sale:', [
+            'id' => $sale->id,
+            'room_number' => $sale->room_number,
+            'customer_name' => $sale->customer_name,
+            'status' => $sale->status,
+            'kitchen_status' => $sale->kitchen_status
+        ]);
+
+        foreach ($validated['items'] as $item) {
+            // treat as kitchen item if the id is in the pre-fetched list
+            $isKitchenItem = in_array($item['id'], $kitchenItemIds, true);
+
+            $saleItemData = [
+                'sale_id' => $sale->id,
+                'item_id' => $item['id'],
+                'quantity' => $item['quantity'],
+                'unit_price' => $item['price'],
+                'total_price' => $item['price'] * $item['quantity'],
+                'special_instructions' => $item['notes'] ?? null,
+            ];
+
+            if ($isKitchenItem) {
+                $saleItemData['kitchen_status'] = 'pending';
+            }
+
+            $saleItem = SaleItem::create($saleItemData);
+            
+            Log::info('Created sale item:', [
+                'sale_item_id' => $saleItem->id,
+                'item_id' => $item['id'],
+                'item_name' => $item['name'],
+                'is_kitchen_item' => $isKitchenItem,
+                'kitchen_status' => $saleItem->kitchen_status ?? 'not set'
+            ]);
+
+        }
+
+        
+        // after sale items are created double-check the status in case the
+        // initial detection missed something (e.g. category relationship was
+        // null or cast weirdly). this extra query guarantees the order will
+        // appear on the kitchen display whenever any of its items are
+        // flagged as kitchen items.
+        if (!$hasKitchenItems) {
+            $actualKitchen = $this->saleHasKitchenItems((int) $sale->id);
+
+            if ($actualKitchen) {
+                $hasKitchenItems = true;
+                $sale->update([
+                    'status' => 'pending',
+                    'kitchen_status' => 'pending',
+                    'paid_at' => null, // make sure it's not marked paid prematurely
+                ]);
+                Log::info('Re‑flagged order as having kitchen items after creation', [
+                    'order_id' => $sale->id,
+                    'new_status' => 'pending',
+                    'new_kitchen_status' => 'pending'
+                ]);
+            }
+        }
+
+        // After creating sale items, deduct inventory
+        try {
+            $this->deductInventory($sale);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Inventory deduction failed: ' . $e->getMessage());
+            throw $e; // Re-throw to be caught by outer catch
+        }
+
+        DB::commit();
+
+        // Update menu last updated timestamp
+        cache()->put('menu_last_updated', time(), 3600);
+
+        $successMessage = '✅ Order #' . $sale->id . ' placed successfully!';
+        if ($hasKitchenItems) {
+            $successMessage .= " Kitchen items sent to kitchen.";
+        } else {
+            $successMessage .= " Order completed.";
+        }
+
+        Log::info('========== ORDER CREATED SUCCESSFULLY ==========', [
+            'order_id' => $sale->id,
+            'final_status' => $sale->status,
+            'final_kitchen_status' => $sale->kitchen_status,
+            'has_kitchen_items' => $hasKitchenItems
+        ]);
+
+        return redirect()->route('admin.pos.index')->with([
+            'success' => $successMessage,
+            'order_data' => [
+                'order_id' => $sale->id,
+                'total' => $totalAmount,
+                'discount' => $totalDiscount,
+                'order_number' => 'ORD-' . str_pad($sale->id, 6, '0', STR_PAD_LEFT),
+                'has_kitchen_items' => $hasKitchenItems,
+            ]
+        ]);
+
+    } catch (\Exception $e) {
+        DB::rollBack();
+        
+        Log::error('========== ORDER FAILED ==========');
+        Log::error('Error: ' . $e->getMessage());
+        Log::error('Trace: ' . $e->getTraceAsString());
+        
+        return redirect()->route('admin.pos.index')->with([
+            'error' => '❌ Failed to place order: ' . $e->getMessage()
+        ]);
+    }
+}
     public function markAsPaid(Request $request, Sale $sale)
     {
         try {
@@ -684,6 +930,52 @@ class PosController extends Controller
             DB::rollBack();
             
             return redirect()->route('admin.pos.index')->with('error', '❌ Failed to mark as paid: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Cancel/void an order and restore previously deducted inventory.
+     */
+    public function cancel(Request $request, Sale $order)
+    {
+        try {
+            DB::beginTransaction();
+
+            if ($order->status === 'cancelled') {
+                DB::commit();
+
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Order #' . $order->id . ' is already cancelled.',
+                ]);
+            }
+
+            $this->restockInventory($order, 'order_cancelled');
+
+            $order->update([
+                'status' => 'cancelled',
+                'kitchen_status' => 'cancelled',
+            ]);
+
+            DB::commit();
+
+            cache()->put('menu_last_updated', time(), 3600);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Order #' . $order->id . ' cancelled and stock restored.',
+            ]);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Failed to cancel order', [
+                'order_id' => $order->id ?? null,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage(),
+            ], 500);
         }
     }
 
@@ -732,11 +1024,7 @@ class PosController extends Controller
             ]);
 
             // Update all kitchen items to ready
-            $kitchenItems = SaleItem::where('sale_id', $order->id)
-                ->whereHas('item.category', function($query) {
-                    $query->where('is_kitchen_category', true);
-                })
-                ->get();
+            $kitchenItems = $this->kitchenSaleItemsQuery((int) $order->id)->get();
                 
             foreach ($kitchenItems as $item) {
                 $item->update([
@@ -794,24 +1082,17 @@ class PosController extends Controller
                 ->get();
             
             foreach ($saleItems as $saleItem) {
-                // Check if this item belongs to a kitchen category
-                if ($saleItem->item && $saleItem->item->category) {
-                    $isKitchen = false;
-                    
-                    // Check for is_kitchen_category (now cast to boolean in model)
-                    if (isset($saleItem->item->category->is_kitchen_category) && $saleItem->item->category->is_kitchen_category === true) {
-                        $isKitchen = true;
-                    }
-                    
-                    if ($isKitchen) {
-                        $hasKitchenItems = true;
-                        
-                        // Check if this kitchen item is ready
-                        $itemStatus = $saleItem->kitchen_status ?? 'pending';
-                        if ($itemStatus !== 'ready' && $itemStatus !== 'completed') {
-                            $allKitchenItemsReady = false;
-                            $unreadyItems[] = $saleItem->item->name . ' (' . $itemStatus . ')';
-                        }
+                $isKitchen = $this->isKitchenSaleItem($saleItem);
+
+                if ($isKitchen) {
+                    $hasKitchenItems = true;
+
+                    // Check if this kitchen item is ready
+                    $itemStatus = $saleItem->kitchen_status ?? 'pending';
+                    if ($itemStatus !== 'ready' && $itemStatus !== 'completed') {
+                        $allKitchenItemsReady = false;
+                        $itemName = optional($saleItem->item)->name ?? 'Unknown Item';
+                        $unreadyItems[] = $itemName . ' (' . $itemStatus . ')';
                     }
                 }
             }
@@ -823,14 +1104,29 @@ class PosController extends Controller
                 throw new \Exception($errorMessage);
             }
 
-            // Update order status to completed
+            // Update order status - only update columns that exist
             $updateData = [
                 'status' => 'completed',
-                'kitchen_status' => 'completed',
-                'paid_at' => now(),
+                'kitchen_status' => 'completed'
             ];
             
+            // Guard against environments where this column has not been migrated yet
+            if (Schema::hasColumn('sales', 'completed_at')) {
+                $updateData['completed_at'] = now();
+            } else {
+                Log::info('completed_at column does not exist, skipping');
+            }
+            
             $order->update($updateData);
+
+            // Update all kitchen items to completed
+            $this->kitchenSaleItemsQuery((int) $order->id)
+                ->update([
+                    'kitchen_status' => 'completed',
+                    'kitchen_completed_at' => now(),
+                ]);
+            
+            Log::info('Kitchen items marked as completed for order', ['order_id' => $order->id]);
 
             DB::commit();
 
@@ -858,5 +1154,326 @@ class PosController extends Controller
                 'error' => $e->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * Handle inventory deduction based on recipe ingredients
+     */
+    private function deductInventory(Sale $sale)
+    {
+        $saleItems = SaleItem::with(['item.ingredients', 'item.category'])->where('sale_id', $sale->id)->get();
+        $poolIdsByCode = InventoryPool::pluck('id', 'code')->map(fn ($id) => (int) $id)->all();
+        $defaultPoolId = (int) ($poolIdsByCode[InventoryPool::RESTO] ?? 1);
+
+        $requirements = [];
+        $insufficientStock = [];
+
+        foreach ($saleItems as $saleItem) {
+            $item = $saleItem->item;
+            if (!$item) {
+                continue;
+            }
+
+            // Skip if item has no recipe
+            if (!$item->ingredients || $item->ingredients->isEmpty()) {
+                Log::warning("Item {$item->name} has no recipe defined");
+                continue;
+            }
+
+            $poolCode = $this->resolveItemPoolCode($item);
+            $poolId = (int) ($poolIdsByCode[$poolCode] ?? $defaultPoolId);
+
+            foreach ($item->ingredients as $ingredient) {
+                $requiredRaw = (float) $ingredient->pivot->quantity_required * (float) $saleItem->quantity;
+                $requiredQuantity = $this->convertQuantity(
+                    $requiredRaw,
+                    (string) ($ingredient->pivot->unit ?? $ingredient->unit ?? ''),
+                    (string) ($ingredient->unit ?? '')
+                ) ?? $requiredRaw;
+                if ((float) $requiredQuantity <= 0) {
+                    continue;
+                }
+
+                $key = $ingredient->id . ':' . $poolId;
+
+                if (!isset($requirements[$key])) {
+                    $requirements[$key] = [
+                        'ingredient' => $ingredient,
+                        'quantity' => 0.0,
+                        'inventory_pool_id' => $poolId,
+                        'pool_code' => $poolCode,
+                    ];
+                }
+                $requirements[$key]['quantity'] += (float) $requiredQuantity;
+            }
+        }
+
+        $deductions = [];
+        foreach ($requirements as $data) {
+            $ingredient = $data['ingredient'];
+            $ingredientId = (int) $ingredient->id;
+            $poolId = (int) $data['inventory_pool_id'];
+            $poolCode = (string) $data['pool_code'];
+
+            $stock = IngredientStock::where('ingredient_id', $ingredientId)
+                ->where('inventory_pool_id', $poolId)
+                ->lockForUpdate()
+                ->first();
+
+            $available = (float) optional($stock)->quantity;
+            $required = (float) $data['quantity'];
+            if ($required <= 0) {
+                continue;
+            }
+
+            if ($available < $required) {
+                $insufficientStock[] = [
+                    'ingredient' => $ingredient->name,
+                    'required' => $required,
+                    'available' => $available,
+                    'unit' => $ingredient->unit,
+                    'pool_code' => $poolCode,
+                ];
+                continue;
+            }
+
+            $deductions[] = [
+                'ingredient_id' => (int) $ingredientId,
+                'ingredient_name' => $ingredient->name,
+                'quantity' => $required,
+                'stock' => $stock,
+                'unit' => $ingredient->unit,
+                'inventory_pool_id' => $poolId,
+                'pool_code' => $poolCode,
+            ];
+        }
+
+        if (!empty($insufficientStock)) {
+            $message = "Insufficient ingredients:\n";
+            foreach ($insufficientStock as $issue) {
+                $message .= "- Need {$issue['required']} {$issue['unit']} of {$issue['ingredient']} in {$issue['pool_code']} pool (only {$issue['available']} available)\n";
+            }
+            throw new \Exception(trim($message));
+        }
+
+        foreach ($deductions as $data) {
+            /** @var \App\Models\IngredientStock $stock */
+            $stock = $data['stock'];
+            $stock->quantity = max(0, (float) $stock->quantity - (float) $data['quantity']);
+            $stock->save();
+
+            InventoryTransaction::create([
+                'ingredient_id' => $data['ingredient_id'],
+                'inventory_pool_id' => $data['inventory_pool_id'],
+                'quantity_delta' => -1 * (float) $data['quantity'],
+                'reason' => 'order_deduction',
+                'reference_type' => 'sale',
+                'reference_id' => $sale->id,
+                'user_id' => Auth::id(),
+                'notes' => 'Automatic deduction on order placement',
+                'meta' => [
+                    'sale_id' => $sale->id,
+                    'pool_code' => $data['pool_code'],
+                ],
+            ]);
+
+            Log::info('Inventory deducted', [
+                'ingredient' => $data['ingredient_name'],
+                'deducted' => $data['quantity'],
+                'new_quantity' => $stock->quantity,
+                'pool_code' => $data['pool_code'],
+                'sale_id' => $sale->id
+            ]);
+        }
+
+        return $deductions;
+    }
+
+    /**
+     * Restore deducted inventory for a cancelled/voided order.
+     */
+    private function restockInventory(Sale $sale, string $reason): void
+    {
+        $transactions = InventoryTransaction::where('reference_type', 'sale')
+            ->where('reference_id', $sale->id)
+            ->where('reason', 'order_restock')
+            ->exists();
+        
+
+        $deductionTransactions = InventoryTransaction::where('reference_type', 'sale')
+            ->where('reference_id', $sale->id)
+            ->where('reason', 'order_deduction')
+            ->select('ingredient_id', 'inventory_pool_id', DB::raw('SUM(quantity_delta) as total_delta'))
+            ->groupBy('ingredient_id', 'inventory_pool_id')
+            ->get();
+
+        if ($deductionTransactions->isEmpty()) {
+            $this->restockFromSaleRecipeFallback($sale, $reason);
+            return;
+        }
+
+        foreach ($deductionTransactions as $tx) {
+            $deductedAmount = abs((float) $tx->total_delta);
+            if ($deductedAmount <= 0) {
+                continue;
+            }
+
+            $stock = IngredientStock::where('ingredient_id', $tx->ingredient_id)
+                ->where('inventory_pool_id', $tx->inventory_pool_id)
+                ->lockForUpdate()
+                ->first();
+
+            if (!$stock) {
+                $stock = IngredientStock::create([
+                    'ingredient_id' => $tx->ingredient_id,
+                    'inventory_pool_id' => $tx->inventory_pool_id,
+                    'quantity' => 0,
+                    'min_stock' => 0,
+                    'cost_per_unit' => 0,
+                ]);
+            }
+
+            $stock->quantity = (float) $stock->quantity + $deductedAmount;
+            $stock->save();
+
+            InventoryTransaction::create([
+                'ingredient_id' => $tx->ingredient_id,
+                'inventory_pool_id' => $tx->inventory_pool_id,
+                'quantity_delta' => $deductedAmount,
+                'reason' => 'order_restock',
+                'reference_type' => 'sale',
+                'reference_id' => $sale->id,
+                'user_id' => Auth::id(),
+                'notes' => 'Automatic restock on order cancellation/void',
+                'meta' => [
+                    'sale_id' => $sale->id,
+                    'source_reason' => $reason,
+                ],
+            ]);
+        }
+    }
+
+    /**
+     * Fallback restock logic if no historical deduction rows exist.
+     */
+    private function restockFromSaleRecipeFallback(Sale $sale, string $reason): void
+    {
+        $saleItems = SaleItem::with(['item.ingredients', 'item.category'])->where('sale_id', $sale->id)->get();
+        $poolIdsByCode = InventoryPool::pluck('id', 'code')->map(fn ($id) => (int) $id)->all();
+        $defaultPoolId = (int) ($poolIdsByCode[InventoryPool::RESTO] ?? 1);
+        $restocks = [];
+
+        foreach ($saleItems as $saleItem) {
+            $item = $saleItem->item;
+            if (!$item || !$item->ingredients || $item->ingredients->isEmpty()) {
+                continue;
+            }
+
+            $poolCode = $this->resolveItemPoolCode($item);
+            $poolId = (int) ($poolIdsByCode[$poolCode] ?? $defaultPoolId);
+
+            foreach ($item->ingredients as $ingredient) {
+                $qtyRaw = (float) $ingredient->pivot->quantity_required * (float) $saleItem->quantity;
+                $qty = $this->convertQuantity(
+                    $qtyRaw,
+                    (string) ($ingredient->pivot->unit ?? $ingredient->unit ?? ''),
+                    (string) ($ingredient->unit ?? '')
+                ) ?? $qtyRaw;
+                if ($qty <= 0) {
+                    continue;
+                }
+
+                $key = $ingredient->id . ':' . $poolId;
+                if (!isset($restocks[$key])) {
+                    $restocks[$key] = [
+                        'ingredient_id' => (int) $ingredient->id,
+                        'inventory_pool_id' => $poolId,
+                        'pool_code' => $poolCode,
+                        'quantity' => 0.0,
+                    ];
+                }
+                $restocks[$key]['quantity'] += $qty;
+            }
+        }
+
+        foreach ($restocks as $row) {
+            $stock = IngredientStock::where('ingredient_id', $row['ingredient_id'])
+                ->where('inventory_pool_id', $row['inventory_pool_id'])
+                ->lockForUpdate()
+                ->first();
+
+            if (!$stock) {
+                $stock = IngredientStock::create([
+                    'ingredient_id' => $row['ingredient_id'],
+                    'inventory_pool_id' => $row['inventory_pool_id'],
+                    'quantity' => 0,
+                    'min_stock' => 0,
+                    'cost_per_unit' => 0,
+                ]);
+            }
+
+            $stock->quantity = (float) $stock->quantity + (float) $row['quantity'];
+            $stock->save();
+
+            InventoryTransaction::create([
+                'ingredient_id' => $row['ingredient_id'],
+                'inventory_pool_id' => $row['inventory_pool_id'],
+                'quantity_delta' => (float) $row['quantity'],
+                'reason' => 'order_restock',
+                'reference_type' => 'sale',
+                'reference_id' => $sale->id,
+                'user_id' => Auth::id(),
+                'notes' => 'Fallback restock on order cancellation/void',
+                'meta' => [
+                    'sale_id' => $sale->id,
+                    'source_reason' => $reason,
+                    'pool_code' => $row['pool_code'],
+                    'fallback' => true,
+                ],
+            ]);
+        }
+    }
+
+    private function convertQuantity(float $quantity, ?string $fromUnit, ?string $toUnit): ?float
+    {
+        $from = $this->normalizeUnit($fromUnit);
+        $to = $this->normalizeUnit($toUnit);
+
+        if ($from === '' || $to === '' || $from === $to) {
+            return $quantity;
+        }
+
+        if ($from === 'g' && $to === 'kg') {
+            return $quantity / 1000;
+        }
+
+        if ($from === 'kg' && $to === 'g') {
+            return $quantity * 1000;
+        }
+
+        if ($from === 'ml' && $to === 'l') {
+            return $quantity / 1000;
+        }
+
+        if ($from === 'l' && $to === 'ml') {
+            return $quantity * 1000;
+        }
+
+        return null;
+    }
+
+    private function normalizeUnit(?string $unit): string
+    {
+        $normalized = strtolower(trim((string) $unit));
+
+        return match ($normalized) {
+            'gram', 'grams', 'gm', 'gms' => 'g',
+            'kilogram', 'kilograms', 'kgs' => 'kg',
+            'liter', 'litre', 'liters', 'litres', 'ltr', 'ltrs' => 'l',
+            'milliliter', 'millilitre', 'milliliters', 'millilitres', 'mls' => 'ml',
+            'pack', 'packs', 'boxes' => 'box',
+            'pcs', 'pc', 'piece', 'pieces' => 'piece',
+            default => $normalized,
+        };
     }
 }

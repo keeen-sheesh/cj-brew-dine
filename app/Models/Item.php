@@ -1,4 +1,5 @@
 <?php
+// app/Models/Item.php
 
 namespace App\Models;
 
@@ -14,6 +15,7 @@ class Item extends Model
         'description',
         'price',
         'category_id',
+        'inventory_pool_code',
         'is_available',
         'is_featured',
         'stock_quantity',
@@ -24,15 +26,18 @@ class Item extends Model
         'sort_order',
         'image',
         'has_sizes',
+        'has_recipe', // Add this
     ];
 
     protected $casts = [
         'is_available' => 'boolean',
         'is_featured' => 'boolean',
         'has_sizes' => 'boolean',
+        'has_recipe' => 'boolean', // Add this
         'price' => 'decimal:2',
         'price_solo' => 'decimal:2',
         'price_whole' => 'decimal:2',
+        'inventory_pool_code' => 'string',
         'stock_quantity' => 'integer',
         'low_stock_threshold' => 'integer',
         'sort_order' => 'integer'
@@ -50,7 +55,7 @@ class Item extends Model
         return $this->hasMany(SaleItem::class);
     }
 
-    // Relationship with sizes (many-to-many)
+    // Relationship with sizes
     public function sizes()
     {
         return $this->belongsToMany(Size::class, 'item_sizes')
@@ -58,22 +63,48 @@ class Item extends Model
                     ->withTimestamps();
     }
 
-    // Relationship with item_sizes (has many)
     public function itemSizes()
     {
         return $this->hasMany(ItemSize::class);
     }
 
-    // Relationship with inventory transactions
-    public function inventoryTransactions()
+    // NEW: Relationship with ingredients
+    public function ingredients()
     {
-        return $this->hasMany(InventoryTransaction::class);
+        return $this->belongsToMany(Ingredient::class, 'item_ingredients')
+                    ->withPivot('quantity_required', 'unit', 'notes')
+                    ->withTimestamps();
     }
 
-    // Scope for available items
-    public function scopeAvailable($query)
+    // NEW: Check if item has all ingredients defined
+    public function getHasRecipeAttribute()
     {
-        return $query->where('is_available', true);
+        return $this->ingredients()->count() > 0;
+    }
+
+    // NEW: Calculate potential profit margin
+    public function getRecipeCostAttribute()
+    {
+        $totalCost = 0;
+        foreach ($this->ingredients as $ingredient) {
+            $cost = $ingredient->cost_per_unit * $ingredient->pivot->quantity_required;
+            $totalCost += $cost;
+        }
+        return $totalCost;
+    }
+
+    // NEW: Get profit margin
+    public function getProfitMarginAttribute()
+    {
+        $cost = $this->recipe_cost;
+        if ($cost <= 0) return 0;
+        return (($this->price - $cost) / $this->price) * 100;
+    }
+
+    // Scope for items that need recipe setup
+    public function scopeNeedsRecipe($query)
+    {
+        return $query->whereDoesntHave('ingredients');
     }
 
     // Get display price based on pricing type

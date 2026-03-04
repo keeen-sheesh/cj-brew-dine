@@ -1,737 +1,303 @@
-import React, { useState, useEffect } from 'react';
-import { Head, Link, router } from '@inertiajs/react';
-import AdminLayout from '@/Layouts/AdminLayout';
+import React from 'react';
+import { Head, Link } from '@inertiajs/react';
 import {
-    Calendar,
-    ChevronDown,
-    RefreshCw,
-    Eye,
-    ShoppingBag,
-    Package,
-    DollarSign,
-    AlertCircle,
-    CheckCircle,
-    XCircle,
     ArrowRight,
+    ChartBar,
+    CreditCard,
+    DollarSign,
+    Package,
+    ShoppingBag,
+    TriangleAlert,
+    UtensilsCrossed,
+    Clock,
+    Flame,
 } from 'lucide-react';
+import AdminLayout from '@/Layouts/AdminLayout';
 
-// Format currency in Philippine Peso
-const formatPeso = (amount) => {
-    if (amount === null || amount === undefined) return '₱0.00';
-    return `₱${parseFloat(amount).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`;
+const formatPeso = (amount = 0) => {
+    const safeAmount = Number(amount) || 0;
+    return `₱${safeAmount.toLocaleString('en-PH', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+    })}`;
 };
 
-// Format number with commas
-const formatNumber = (num) => {
-    if (num === null || num === undefined) return '0';
-    return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+const formatCount = (value = 0) => {
+    const safeValue = Number(value) || 0;
+    return safeValue.toLocaleString('en-PH');
 };
 
-// Role icons and colors
-const roleConfig = {
-    admin: {
-        icon: Crown,
-        color: 'from-purple-500 to-purple-600',
-        bgColor: 'bg-purple-50',
-        textColor: 'text-purple-700',
-        borderColor: 'border-purple-200',
-        label: 'Admin'
-    },
-    resto_admin: {
-        icon: Building2,
-        color: 'from-blue-500 to-blue-600',
-        bgColor: 'bg-blue-50',
-        textColor: 'text-blue-700',
-        borderColor: 'border-blue-200',
-        label: 'Resto Admin'
-    },
-    resto: {
-        icon: Coffee,
-        color: 'from-emerald-500 to-emerald-600',
-        bgColor: 'bg-emerald-50',
-        textColor: 'text-emerald-700',
-        borderColor: 'border-emerald-200',
-        label: 'Resto Staff'
-    },
-    kitchen: {
-        icon: ChefHat,
-        color: 'from-amber-500 to-amber-600',
-        bgColor: 'bg-amber-50',
-        textColor: 'text-amber-700',
-        borderColor: 'border-amber-200',
-        label: 'Kitchen Staff'
-    },
-    customer: {
-        icon: UserCircle,
-        color: 'from-gray-500 to-gray-600',
-        bgColor: 'bg-gray-50',
-        textColor: 'text-gray-700',
-        borderColor: 'border-gray-200',
-        label: 'Customer'
-    }
-};
-
-// Status badge mapping
-const getStatusBadge = (status) => {
-    const statusMap = {
-        'completed': { 
-            bg: 'bg-emerald-50', 
-            text: 'text-emerald-700', 
-            border: 'border-emerald-200',
-            dot: 'bg-emerald-500',
-            icon: CheckCircle,
-            label: 'Completed' 
-        },
-        'pending': { 
-            bg: 'bg-amber-50', 
-            text: 'text-amber-700', 
-            border: 'border-amber-200',
-            dot: 'bg-amber-500',
-            icon: Clock,
-            label: 'Pending' 
-        },
-        'preparing': { 
-            bg: 'bg-blue-50', 
-            text: 'text-blue-700', 
-            border: 'border-blue-200',
-            dot: 'bg-blue-500',
-            icon: Coffee,
-            label: 'Preparing' 
-        },
-        'ready': { 
-            bg: 'bg-purple-50', 
-            text: 'text-purple-700', 
-            border: 'border-purple-200',
-            dot: 'bg-purple-500',
-            icon: CheckCircle,
-            label: 'Ready' 
-        },
-        'cancelled': { 
-            bg: 'bg-rose-50', 
-            text: 'text-rose-700', 
-            border: 'border-rose-200',
-            dot: 'bg-rose-500',
-            icon: XCircle,
-            label: 'Cancelled' 
-        },
+const getStatusStyle = (status) => {
+    const styles = {
+        completed: 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200',
+        ready:     'bg-sky-50 text-sky-700 ring-1 ring-sky-200',
+        preparing: 'bg-amber-50 text-amber-700 ring-1 ring-amber-200',
+        pending:   'bg-orange-50 text-orange-700 ring-1 ring-orange-200',
+        cancelled: 'bg-rose-50 text-rose-700 ring-1 ring-rose-200',
     };
-    return statusMap[status] || { 
-        bg: 'bg-gray-50', 
-        text: 'text-gray-700', 
-        border: 'border-gray-200',
-        dot: 'bg-gray-500',
-        icon: Clock,
-        label: status 
-    };
+    return styles[status] || 'bg-gray-50 text-gray-600 ring-1 ring-gray-200';
 };
 
-// Order type icon and color
-const getOrderTypeInfo = (type) => {
-    const types = {
-        'dine_in': { icon: Home, bg: 'bg-blue-50', text: 'text-blue-700', label: 'Dine In' },
-        'takeout': { icon: Package, bg: 'bg-amber-50', text: 'text-amber-700', label: 'Takeout' },
-        'delivery': { icon: Truck, bg: 'bg-purple-50', text: 'text-purple-700', label: 'Delivery' },
-    };
-    return types[type] || { icon: ShoppingBag, bg: 'bg-gray-50', text: 'text-gray-700', label: type };
-};
+/* ── Module Card ─────────────────────────────────────────── */
+const ModuleCard = ({ href, icon: Icon, title, description, metric, helper, accentClass }) => (
+    <Link
+        href={href}
+        className="group relative flex flex-col rounded-2xl bg-white border border-gray-100 shadow-sm overflow-hidden transition-all duration-200 hover:-translate-y-1 hover:shadow-lg"
+    >
+        {/* top accent bar */}
+        <div className={`h-1 w-full ${accentClass}`} />
 
-// View All Transactions Modal
-const ViewAllModal = ({ isOpen, onClose, allTransactions = [], onViewDetails }) => {
-    const [localFilter, setLocalFilter] = useState('all');
-    const [searchQuery, setSearchQuery] = useState('');
-    const [currentPage, setCurrentPage] = useState(1);
-    const itemsPerPage = 15;
-
-    // Filter transactions locally
-    const filteredTransactions = allTransactions.filter(transaction => {
-        // Status filter
-        const matchesStatus = localFilter === 'all' || transaction.status === localFilter;
-        
-        // Search filter
-        const matchesSearch = searchQuery === '' || 
-            transaction.customer_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            transaction.order_number?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            transaction.id?.toString().includes(searchQuery);
-        
-        return matchesStatus && matchesSearch;
-    });
-
-    // Pagination
-    const totalPages = Math.ceil(filteredTransactions.length / itemsPerPage);
-    const indexOfLastItem = currentPage * itemsPerPage;
-    const indexOfFirstItem = indexOfLastItem - itemsPerPage;
-    const currentTransactions = filteredTransactions.slice(indexOfFirstItem, indexOfLastItem);
-
-    // Reset page when filter changes
-    useEffect(() => {
-        setCurrentPage(1);
-    }, [localFilter, searchQuery]);
-
-    if (!isOpen) return null;
-
-    return (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-xl shadow-2xl max-w-6xl w-full max-h-[90vh] overflow-hidden">
-                {/* Header */}
-                <div className="p-6 border-b border-gray-200 bg-gradient-to-r from-blue-500 to-blue-600">
-                    <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-4">
-                            <div className="p-3 bg-white/20 rounded-xl">
-                                <ShoppingBag className="w-8 h-8 text-white" />
-                            </div>
-                            <div>
-                                <h2 className="text-2xl font-bold text-white">All Transactions</h2>
-                                <p className="text-white/80 text-sm mt-1">
-                                    View and manage all orders
-                                </p>
-                            </div>
-                        </div>
-                        <button 
-                            onClick={onClose}
-                            className="p-2 hover:bg-white/20 rounded-lg transition-colors"
-                        >
-                            <X className="w-5 h-5 text-white" />
-                        </button>
-                    </div>
+        <div className="flex flex-col flex-1 p-6">
+            <div className="mb-5 flex items-start justify-between">
+                <div className="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-gray-50 border border-gray-100">
+                    <Icon className="h-5 w-5 text-gray-700" />
                 </div>
+                <ArrowRight className="h-4 w-4 text-gray-300 transition-all duration-150 group-hover:translate-x-1 group-hover:text-gray-500" />
+            </div>
 
-                {/* Filters */}
-                <div className="p-6 border-b border-gray-200 bg-gray-50">
-                    <div className="flex flex-col md:flex-row gap-4">
-                        {/* Status Filter */}
-                        <div className="flex bg-white border border-gray-300 rounded-lg overflow-hidden">
-                            {['all', 'completed', 'pending', 'preparing', 'ready'].map((filter) => (
-                                <button
-                                    key={filter}
-                                    onClick={() => setLocalFilter(filter)}
-                                    className={`px-4 py-2 text-sm font-medium transition-colors ${
-                                        localFilter === filter
-                                            ? 'bg-blue-600 text-white'
-                                            : 'text-gray-600 hover:bg-gray-50'
-                                    }`}
-                                >
-                                    {filter.charAt(0).toUpperCase() + filter.slice(1)}
-                                </button>
-                            ))}
-                        </div>
+            <h3 className="text-base font-semibold text-gray-900 tracking-tight">{title}</h3>
+            <p className="mt-1 text-xs text-gray-500 leading-relaxed">{description}</p>
 
-                        {/* Search */}
-                        <div className="flex-1 relative">
-                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                            <input
-                                type="text"
-                                value={searchQuery}
-                                onChange={(e) => setSearchQuery(e.target.value)}
-                                placeholder="Search by customer name or order number..."
-                                className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                            />
-                        </div>
-
-                        {/* Results count */}
-                        <div className="flex items-center px-4 py-2 bg-blue-50 text-blue-700 rounded-lg border border-blue-200">
-                            <span className="text-sm font-medium">
-                                {filteredTransactions.length} results
-                            </span>
-                        </div>
-                    </div>
-                </div>
-
-                {/* Table */}
-                <div className="overflow-y-auto" style={{ maxHeight: 'calc(90vh - 200px)' }}>
-                    <table className="w-full">
-                        <thead className="bg-gray-50 sticky top-0">
-                            <tr className="text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                <th className="px-6 py-4">Order</th>
-                                <th className="px-6 py-4">Customer / Cashier</th>
-                                <th className="px-6 py-4">Items</th>
-                                <th className="px-6 py-4">Amount</th>
-                                <th className="px-6 py-4">Status</th>
-                                <th className="px-6 py-4">Time</th>
-                                <th className="px-6 py-4"></th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-200">
-                            {currentTransactions.length > 0 ? (
-                                currentTransactions.map((transaction) => {
-                                    const status = getStatusBadge(transaction.status);
-                                    const StatusIcon = status.icon;
-                                    const OrderTypeIcon = getOrderTypeInfo(transaction.order_type).icon;
-                                    const cashierConfig = roleConfig[transaction.cashier_role || 'resto'];
-                                    const CashierIcon = cashierConfig.icon;
-                                    
-                                    return (
-                                        <tr 
-                                            key={transaction.id} 
-                                            className="hover:bg-gray-50 cursor-pointer transition-colors"
-                                            onClick={() => {
-                                                onViewDetails(transaction.id);
-                                                onClose();
-                                            }}
-                                        >
-                                            <td className="px-6 py-4">
-                                                <div className="flex items-center gap-2">
-                                                    <div className={`p-1.5 rounded-lg ${getOrderTypeInfo(transaction.order_type).bg}`}>
-                                                        <OrderTypeIcon className={`w-3 h-3 ${getOrderTypeInfo(transaction.order_type).text}`} />
-                                                    </div>
-                                                    <span className="font-mono font-medium text-gray-900">
-                                                        {transaction.order_number}
-                                                    </span>
-                                                    {transaction.is_hotel && (
-                                                        <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-xs font-medium rounded-full">
-                                                            Hotel
-                                                        </span>
-                                                    )}
-                                                    {transaction.is_personal && (
-                                                        <span className="px-2 py-0.5 bg-pink-100 text-pink-700 text-xs font-medium rounded-full">
-                                                            Personal
-                                                        </span>
-                                                    )}
-                                                </div>
-                                            </td>
-                                            <td className="px-6 py-4">
-                                                <div className="space-y-2">
-                                                    {/* Customer */}
-                                                    <div className="flex items-center gap-2">
-                                                        <User className="w-3 h-3 text-gray-400" />
-                                                        <span className="text-sm text-gray-900">{transaction.customer_name}</span>
-                                                    </div>
-                                                    {/* Cashier */}
-                                                    <div className="flex items-center gap-2">
-                                                        <div className={`p-1 rounded ${cashierConfig.bgColor}`}>
-                                                            <CashierIcon className={`w-3 h-3 ${cashierConfig.textColor}`} />
-                                                        </div>
-                                                        <span className={`text-xs font-medium ${cashierConfig.textColor}`}>
-                                                            {transaction.cashier_name || 'Unknown'}
-                                                        </span>
-                                                    </div>
-                                                    {transaction.room_number && (
-                                                        <div className="text-xs text-gray-500">Room #{transaction.room_number}</div>
-                                                    )}
-                                                </div>
-                                            </td>
-                                            <td className="px-6 py-4 text-sm text-gray-600">
-                                                {transaction.items_count} items
-                                            </td>
-                                            <td className="px-6 py-4">
-                                                <span className="font-bold text-gray-900">
-                                                    {formatPeso(transaction.total_amount)}
-                                                </span>
-                                            </td>
-                                            <td className="px-6 py-4">
-                                                <div className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium ${status.bg} ${status.text}`}>
-                                                    <StatusIcon className="w-3 h-3" />
-                                                    {status.label}
-                                                </div>
-                                            </td>
-                                            <td className="px-6 py-4 text-sm text-gray-500">
-                                                {new Date(transaction.created_at).toLocaleTimeString('en-PH', { 
-                                                    hour: '2-digit', 
-                                                    minute: '2-digit' 
-                                                })}
-                                            </td>
-                                            <td className="px-6 py-4">
-                                                <button className="p-1 hover:bg-gray-100 rounded-lg">
-                                                    <MoreHorizontal className="w-4 h-4 text-gray-400" />
-                                                </button>
-                                            </td>
-                                        </tr>
-                                    );
-                                })
-                            ) : (
-                                <tr>
-                                    <td colSpan="7" className="px-6 py-12 text-center">
-                                        <div className="flex flex-col items-center">
-                                            <ShoppingBag className="w-12 h-12 text-gray-300 mb-3" />
-                                            <p className="text-gray-500 font-medium">No transactions found</p>
-                                            <p className="text-sm text-gray-400 mt-1">Try adjusting your filters</p>
-                                        </div>
-                                    </td>
-                                </tr>
-                            )}
-                        </tbody>
-                    </table>
-                </div>
-
-                {/* Pagination */}
-                {totalPages > 1 && (
-                    <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex items-center justify-between">
-                        <p className="text-sm text-gray-500">
-                            Showing <span className="font-medium text-gray-700">{indexOfFirstItem + 1}</span> to{' '}
-                            <span className="font-medium text-gray-700">{Math.min(indexOfLastItem, filteredTransactions.length)}</span>{' '}
-                            of <span className="font-medium text-gray-700">{filteredTransactions.length}</span> entries
-                        </p>
-                        <div className="flex gap-2">
-                            <button
-                                onClick={() => setCurrentPage(p => Math.max(p - 1, 1))}
-                                disabled={currentPage === 1}
-                                className="px-3 py-1 border border-gray-300 rounded-lg text-gray-600 hover:bg-gray-50 disabled:opacity-50"
-                            >
-                                Previous
-                            </button>
-                            <span className="px-4 py-1 bg-blue-600 text-white rounded-lg font-medium">
-                                {currentPage}
-                            </span>
-                            <button
-                                onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))}
-                                disabled={currentPage === totalPages}
-                                className="px-3 py-1 border border-gray-300 rounded-lg text-gray-600 hover:bg-gray-50 disabled:opacity-50"
-                            >
-                                Next
-                            </button>
-                        </div>
-                    </div>
-                )}
+            <div className="mt-auto pt-5 border-t border-gray-50">
+                <p className="text-2xl font-bold text-gray-900 tabular-nums">{metric}</p>
+                <p className="mt-0.5 text-xs text-gray-400">{helper}</p>
             </div>
         </div>
-    );
-};
+    </Link>
+);
 
-export default function Dashboard({ 
-    auth, 
-    stats, 
-    recentSales, 
-    weeklyData, 
-    topItems,
-    paymentMethodBreakdown,
-    orderTypeBreakdown,
-    filters,
-    allTransactions = [] // Add this prop for all transactions
+/* ── Stat Card ───────────────────────────────────────────── */
+const StatCard = ({ icon: Icon, label, value, hint, iconClass, valueClass = 'text-gray-900' }) => (
+    <div className="rounded-2xl bg-white border border-gray-100 shadow-sm p-5">
+        <div className="flex items-center justify-between mb-4">
+            <p className="text-xs font-medium text-gray-400 uppercase tracking-widest">{label}</p>
+            <div className={`inline-flex h-8 w-8 items-center justify-center rounded-lg ${iconClass}`}>
+                <Icon className="h-3.5 w-3.5" />
+            </div>
+        </div>
+        <p className={`text-2xl font-bold tabular-nums ${valueClass}`}>{value}</p>
+        <p className="mt-1 text-xs text-gray-400">{hint}</p>
+    </div>
+);
+
+/* ── Main ────────────────────────────────────────────────── */
+export default function Dashboard({
+    auth,
+    stats = {},
+    recentSales = { data: [] },
+    topItems = [],
+    filters = {},
 }) {
-    const [dateRange, setDateRange] = useState(filters?.range || 'today');
-    const [showDateDropdown, setShowDateDropdown] = useState(false);
-    const [selectedTransaction, setSelectedTransaction] = useState(null);
-    const [isLoadingTransaction, setIsLoadingTransaction] = useState(false);
-    const [currentPage, setCurrentPage] = useState(recentSales?.current_page || 1);
-    
-    // Date range options
-    const dateRangeOptions = [
-        { value: 'today', label: 'Today' },
-        { value: 'yesterday', label: 'Yesterday' },
-        { value: 'this_week', label: 'This Week' },
-        { value: 'last_week', label: 'Last Week' },
-        { value: 'this_month', label: 'This Month' },
-        { value: 'last_month', label: 'Last Month' },
+    const recentTransactions = (recentSales?.data || []).slice(0, 8);
+    const bestSellers = (topItems || []).slice(0, 6);
+    const maxRevenue = bestSellers.length > 0 ? Math.max(...bestSellers.map(i => Number(i.revenue) || 0)) : 1;
+
+    const modules = [
+        {
+            href: '/cashier/pos',
+            icon: CreditCard,
+            title: 'Point of Sale',
+            description: 'Take orders, process payments, and manage active tickets.',
+            metric: `${formatCount(stats.pendingOrders)} active`,
+            helper: 'Pending and preparing orders right now',
+            accentClass: 'bg-gradient-to-r from-sky-400 to-blue-500',
+        },
+        {
+            href: '/admin/inventory',
+            icon: Package,
+            title: 'Inventory',
+            description: 'Track ingredient levels and reorder before stock runs out.',
+            metric: `${formatCount(stats.lowStockItems)} low stock`,
+            helper: `${formatCount(stats.outOfStockItems)} items out of stock`,
+            accentClass: 'bg-gradient-to-r from-amber-400 to-orange-400',
+        },
+        {
+            href: '/admin/foods',
+            icon: UtensilsCrossed,
+            title: 'Food Menu',
+            description: 'Update categories, item details, and menu availability.',
+            metric: `${formatCount(bestSellers.length)} top sellers`,
+            helper: 'Based on selected report range',
+            accentClass: 'bg-gradient-to-r from-emerald-400 to-teal-500',
+        },
     ];
-    
-    const selectedRangeLabel = dateRangeOptions.find(opt => opt.value === dateRange)?.label || 'Today';
-    
-    // Handle date range change
-    const handleDateRangeChange = (range) => {
-        setDateRange(range);
-        setShowDateDropdown(false);
-        router.get('/admin/dashboard', { 
-            range, 
-            page: 1,
-        }, { 
-            preserveState: true 
-        });
-    };
-    
-    // Handle refresh
-    const handleRefresh = () => {
-        router.get('/admin/dashboard', { 
-            range: dateRange,
-            page: currentPage,
-        }, { 
-            preserveState: true 
-        });
-    };
-    
-    // Fetch transaction details
-    const fetchTransactionDetails = async (orderId) => {
-        setIsLoadingTransaction(true);
-        try {
-            const response = await fetch(`/admin/transactions/${orderId}`);
-            const data = await response.json();
-            setSelectedTransaction(data);
-        } catch (error) {
-            console.error('Failed to fetch transaction:', error);
-        } finally {
-            setIsLoadingTransaction(false);
-        }
-    };
-    
-    // Go to page
-    const goToPage = (page) => {
-        setCurrentPage(page);
-        router.get('/admin/dashboard', { 
-            range: dateRange,
-            page,
-        }, { 
-            preserveState: true 
-        });
-    };
-    
-    // Get status badge
-    const getStatusBadge = (status) => {
-        const statusMap = {
-            'completed': { bg: 'bg-green-50', border: 'border-green-200', text: 'text-green-700', icon: CheckCircle },
-            'pending': { bg: 'bg-yellow-50', border: 'border-yellow-200', text: 'text-yellow-700', icon: AlertCircle },
-            'preparing': { bg: 'bg-blue-50', border: 'border-blue-200', text: 'text-blue-700', icon: ShoppingBag },
-            'cancelled': { bg: 'bg-red-50', border: 'border-red-200', text: 'text-red-700', icon: XCircle },
-        };
-        return statusMap[status] || statusMap['pending'];
-    };
 
     return (
         <AdminLayout auth={auth}>
-            <Head title="Dashboard" />
-            
-            {/* Header */}
-            <div className="mb-8">
-                <div className="flex items-center justify-between">
-                    <div>
-                        <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-                        <p className="text-gray-600 mt-1">Welcome back! Here's your business overview.</p>
-                    </div>
-                    <button
-                        onClick={handleRefresh}
-                        className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
-                    >
-                        <RefreshCw className="w-4 h-4" />
-                        Refresh
-                    </button>
-                </div>
-            </div>
-            
-            {/* Date Range Selector */}
-            <div className="mb-6 flex items-center gap-2">
-                <span className="text-sm font-medium text-gray-700">Date Range:</span>
-                <div className="relative">
-                    <button
-                        onClick={() => setShowDateDropdown(!showDateDropdown)}
-                        className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
-                    >
-                        <Calendar className="w-4 h-4 text-gray-600" />
-                        <span className="text-gray-700">{selectedRangeLabel}</span>
-                        <ChevronDown className="w-4 h-4 text-gray-600" />
-                    </button>
-                    
-                    {showDateDropdown && (
-                        <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10 min-w-48">
-                            {dateRangeOptions.map(option => (
-                                <button
-                                    key={option.value}
-                                    onClick={() => handleDateRangeChange(option.value)}
-                                    className={`w-full text-left px-4 py-2 hover:bg-gray-100 ${
-                                        dateRange === option.value ? 'bg-blue-50 text-blue-600' : 'text-gray-700'
-                                    }`}
-                                >
-                                    {option.label}
-                                </button>
-                            ))}
-                        </div>
-                    )}
-                </div>
-            </div>
-            
-            {/* KPI Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-                {/* Total Sales */}
-                <div className="bg-white rounded-lg shadow border border-gray-200 p-6">
-                    <div className="flex items-center justify-between">
+            <Head title="Admin Dashboard" />
+
+            <div className="space-y-6">
+
+                {/* ── Hero Header ───────────────────────────── */}
+                <section className="relative overflow-hidden rounded-2xl bg-gray-900 px-8 py-7 shadow-lg">
+                    {/* subtle dot-grid texture */}
+                    <div
+                        aria-hidden="true"
+                        className="pointer-events-none absolute inset-0 opacity-[0.04]"
+                        style={{
+                            backgroundImage: 'radial-gradient(circle, #fff 1px, transparent 1px)',
+                            backgroundSize: '20px 20px',
+                        }}
+                    />
+                    {/* warm glow */}
+                    <div
+                        aria-hidden="true"
+                        className="pointer-events-none absolute -top-20 -right-20 h-64 w-64 rounded-full opacity-10"
+                        style={{ background: 'radial-gradient(circle, #f59e0b, transparent 70%)' }}
+                    />
+
+                    <div className="relative flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                         <div>
-                            <p className="text-sm font-medium text-gray-600">Total Sales</p>
-                            <p className="text-2xl font-bold text-gray-900 mt-2">{formatPeso(stats?.totalSales)}</p>
+                            <div className="flex items-center gap-2 mb-2">
+                                <span className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-2.5 py-0.5 text-xs font-medium text-white/70 ring-1 ring-white/10">
+                                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                                    Live
+                                </span>
+                            </div>
+                            <h1 className="text-2xl font-bold text-white tracking-tight">Operations Overview</h1>
+                            <p className="mt-1 text-sm text-white/50">
+                                {filters?.label || 'Today'} — restaurant performance snapshot
+                            </p>
                         </div>
-                        <div className="p-3 bg-green-100 rounded-lg">
-                            <DollarSign className="w-6 h-6 text-green-600" />
-                        </div>
-                    </div>
-                </div>
-                
-                {/* Total Orders */}
-                <div className="bg-white rounded-lg shadow border border-gray-200 p-6">
-                    <div className="flex items-center justify-between">
-                        <div>
-                            <p className="text-sm font-medium text-gray-600">Total Orders</p>
-                            <p className="text-2xl font-bold text-gray-900 mt-2">{formatNumber(stats?.totalOrders)}</p>
-                        </div>
-                        <div className="p-3 bg-blue-100 rounded-lg">
-                            <ShoppingBag className="w-6 h-6 text-blue-600" />
+
+                        <div className="text-right">
+                            <p className="text-xs text-white/40 uppercase tracking-widest">Total Sales</p>
+                            <p className="text-3xl font-bold text-white tabular-nums">{formatPeso(stats.totalSales)}</p>
+                            <p className="text-xs text-white/40 mt-0.5">{formatCount(stats.completedOrders)} completed orders</p>
                         </div>
                     </div>
-                </div>
-                
-                {/* Completed Orders */}
-                <div className="bg-white rounded-lg shadow border border-gray-200 p-6">
-                    <div className="flex items-center justify-between">
-                        <div>
-                            <p className="text-sm font-medium text-gray-600">Completed</p>
-                            <p className="text-2xl font-bold text-gray-900 mt-2">{formatNumber(stats?.completedOrders)}</p>
+                </section>
+
+                {/* ── Stat Strip ────────────────────────────── */}
+                <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                    <StatCard
+                        icon={DollarSign}
+                        label="Revenue"
+                        value={formatPeso(stats.totalSales)}
+                        hint="Completed orders only"
+                        iconClass="bg-blue-50 text-blue-600"
+                    />
+                    <StatCard
+                        icon={ShoppingBag}
+                        label="Orders"
+                        value={formatCount(stats.totalOrders)}
+                        hint={`${formatCount(stats.completedOrders)} completed`}
+                        iconClass="bg-emerald-50 text-emerald-600"
+                    />
+                    <StatCard
+                        icon={ChartBar}
+                        label="Avg Ticket"
+                        value={formatPeso(stats.averageOrderValue)}
+                        hint="Per completed order"
+                        iconClass="bg-violet-50 text-violet-600"
+                    />
+                    <StatCard
+                        icon={TriangleAlert}
+                        label="Stock Alerts"
+                        value={formatCount(stats.lowStockItems)}
+                        hint={`${formatCount(stats.outOfStockItems)} out of stock`}
+                        iconClass="bg-amber-50 text-amber-600"
+                        valueClass={Number(stats.lowStockItems) > 0 ? 'text-amber-600' : 'text-gray-900'}
+                    />
+                </section>
+
+                {/* ── Module Cards ──────────────────────────── */}
+                <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                    {modules.map((module) => (
+                        <ModuleCard key={module.title} {...module} />
+                    ))}
+                </section>
+
+                {/* ── Tables ────────────────────────────────── */}
+                <section className="grid grid-cols-1 gap-5 xl:grid-cols-5">
+
+                    {/* Recent Transactions */}
+                    <div className="xl:col-span-3 rounded-2xl bg-white border border-gray-100 shadow-sm overflow-hidden">
+                        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-50">
+                            <div className="flex items-center gap-2">
+                                <Clock className="h-4 w-4 text-gray-400" />
+                                <h2 className="text-sm font-semibold text-gray-900">Recent Transactions</h2>
+                            </div>
+                            <Link
+                                href="/admin/transactions"
+                                className="text-xs font-medium text-blue-600 hover:text-blue-700 flex items-center gap-1"
+                            >
+                                View all <ArrowRight className="h-3 w-3" />
+                            </Link>
                         </div>
-                        <div className="p-3 bg-emerald-100 rounded-lg">
-                            <CheckCircle className="w-6 h-6 text-emerald-600" />
+
+                        <div className="divide-y divide-gray-50">
+                            {recentTransactions.length > 0 ? (
+                                recentTransactions.map((sale) => (
+                                    <div
+                                        key={sale.id}
+                                        className="flex items-center justify-between gap-3 px-6 py-3 hover:bg-gray-50/60 transition-colors"
+                                    >
+                                        <div className="min-w-0 flex-1">
+                                            <p className="text-sm font-medium text-gray-900 truncate">{sale.order_number}</p>
+                                            <p className="text-xs text-gray-400 truncate">{sale.customer_name || '—'}</p>
+                                        </div>
+                                        <p className="text-sm font-semibold text-gray-900 tabular-nums shrink-0">
+                                            {formatPeso(sale.total_amount)}
+                                        </p>
+                                        <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium capitalize shrink-0 ${getStatusStyle(sale.status)}`}>
+                                            {sale.status}
+                                        </span>
+                                    </div>
+                                ))
+                            ) : (
+                                <p className="px-6 py-8 text-sm text-gray-400 text-center">No transactions for this range.</p>
+                            )}
                         </div>
                     </div>
-                </div>
-                
-                {/* Pending Orders */}
-                <div className="bg-white rounded-lg shadow border border-gray-200 p-6">
-                    <div className="flex items-center justify-between">
-                        <div>
-                            <p className="text-sm font-medium text-gray-600">Pending</p>
-                            <p className="text-2xl font-bold text-gray-900 mt-2">{formatNumber(stats?.pendingOrders)}</p>
+
+                    {/* Top Menu Items */}
+                    <div className="xl:col-span-2 rounded-2xl bg-white border border-gray-100 shadow-sm overflow-hidden">
+                        <div className="flex items-center gap-2.5 px-6 py-4 border-b border-gray-50">
+                            <Flame className="h-4 w-4 text-orange-400" />
+                            <div>
+                                <h2 className="text-sm font-semibold text-gray-900">Top Menu Items</h2>
+                                <p className="text-xs text-gray-400">By revenue · {filters?.label || 'Today'}</p>
+                            </div>
                         </div>
-                        <div className="p-3 bg-yellow-100 rounded-lg">
-                            <AlertCircle className="w-6 h-6 text-yellow-600" />
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            {/* Additional Stats */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-                {/* Average Order Value */}
-                <div className="bg-white rounded-lg shadow border border-gray-200 p-6">
-                    <p className="text-sm font-medium text-gray-600 mb-2">Average Order Value</p>
-                    <p className="text-2xl font-bold text-gray-900">{formatPeso(stats?.averageOrderValue)}</p>
-                </div>
-                
-                {/* Low Stock Items */}
-                <div className="bg-white rounded-lg shadow border border-gray-200 p-6">
-                    <p className="text-sm font-medium text-gray-600 mb-2">Low Stock Items</p>
-                    <p className="text-2xl font-bold text-yellow-600">{formatNumber(stats?.lowStockItems)}</p>
-                </div>
-                
-                {/* Out of Stock */}
-                <div className="bg-white rounded-lg shadow border border-gray-200 p-6">
-                    <p className="text-sm font-medium text-gray-600 mb-2">Out of Stock</p>
-                    <p className="text-2xl font-bold text-red-600">{formatNumber(stats?.outOfStockItems)}</p>
-                </div>
-            </div>
-            
-            {/* Recent Sales Table */}
-            <div className="bg-white rounded-lg shadow border border-gray-200 p-6 mb-8">
-                <div className="flex items-center justify-between mb-6">
-                    <h2 className="text-lg font-semibold text-gray-900">Recent Sales</h2>
-                    <Link
-                        href="/admin/transactions"
-                        className="flex items-center gap-2 text-blue-600 hover:text-blue-700 text-sm font-medium"
-                    >
-                        View All
-                        <ArrowRight className="w-4 h-4" />
-                    </Link>
-                </div>
-                
-                <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                        <thead>
-                            <tr className="border-b border-gray-200">
-                                <th className="text-left font-semibold text-gray-700 py-3">Order #</th>
-                                <th className="text-left font-semibold text-gray-700 py-3">Customer</th>
-                                <th className="text-left font-semibold text-gray-700 py-3">Amount</th>
-                                <th className="text-left font-semibold text-gray-700 py-3">Status</th>
-                                <th className="text-left font-semibold text-gray-700 py-3">Time</th>
-                                <th className="text-left font-semibold text-gray-700 py-3">Action</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {recentSales?.data && recentSales.data.length > 0 ? (
-                                recentSales.data.map((sale) => {
-                                    const statusBadge = getStatusBadge(sale.status);
-                                    const StatusIcon = statusBadge.icon;
+
+                        <div className="divide-y divide-gray-50">
+                            {bestSellers.length > 0 ? (
+                                bestSellers.map((item, index) => {
+                                    const pct = Math.round((Number(item.revenue) / maxRevenue) * 100);
                                     return (
-                                        <tr key={sale.id} className="border-b border-gray-100 hover:bg-gray-50">
-                                            <td className="py-4">#{sale.order_number}</td>
-                                            <td className="py-4 text-gray-700">{sale.customer_name}</td>
-                                            <td className="py-4 font-medium">{formatPeso(sale.total_amount)}</td>
-                                            <td className="py-4">
-                                                <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium ${statusBadge.bg} ${statusBadge.text}`}>
-                                                    <StatusIcon className="w-3 h-3" />
-                                                    {sale.status.charAt(0).toUpperCase() + sale.status.slice(1)}
-                                                </span>
-                                            </td>
-                                            <td className="py-4 text-gray-600 text-xs">
-                                                {new Date(sale.created_at).toLocaleString()}
-                                            </td>
-                                            <td className="py-4">
-                                                <button
-                                                    onClick={() => fetchTransactionDetails(sale.id)}
-                                                    className="text-blue-600 hover:text-blue-700 text-xs font-medium flex items-center gap-1"
-                                                >
-                                                    <Eye className="w-3 h-3" />
-                                                    View
-                                                </button>
-                                            </td>
-                                        </tr>
+                                        <div key={item.item_id} className="px-6 py-3.5">
+                                            <div className="flex items-center justify-between mb-2">
+                                                <div className="flex items-center gap-2 min-w-0">
+                                                    <span className="text-xs font-bold text-gray-300 w-4 shrink-0 tabular-nums">
+                                                        {index + 1}
+                                                    </span>
+                                                    <p className="text-sm font-medium text-gray-900 truncate">{item.item_name}</p>
+                                                </div>
+                                                <p className="text-sm font-semibold text-gray-900 tabular-nums shrink-0 ml-2">
+                                                    {formatPeso(item.revenue)}
+                                                </p>
+                                            </div>
+                                            <div className="ml-6 flex items-center gap-2">
+                                                <div className="flex-1 h-1 rounded-full bg-gray-100 overflow-hidden">
+                                                    <div
+                                                        className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-teal-500"
+                                                        style={{ width: `${pct}%` }}
+                                                    />
+                                                </div>
+                                                <span className="text-xs text-gray-400 shrink-0">{formatCount(item.quantity)} sold</span>
+                                            </div>
+                                        </div>
                                     );
                                 })
                             ) : (
-                                <tr>
-                                    <td colSpan="6" className="py-8 text-center text-gray-500">No sales data available</td>
-                                </tr>
+                                <p className="px-6 py-8 text-sm text-gray-400 text-center">No top sellers yet.</p>
                             )}
-                        </tbody>
-                    </table>
-                </div>
-                
-                {/* Pagination */}
-                {recentSales?.last_page > 1 && (
-                    <div className="flex items-center justify-between mt-6">
-                        <p className="text-sm text-gray-600">
-                            Showing {recentSales?.from} to {recentSales?.to} of {recentSales?.total} results
-                        </p>
-                        <div className="flex gap-2">
-                            <button
-                                onClick={() => goToPage(currentPage - 1)}
-                                disabled={currentPage === 1}
-                                className="px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-                            >
-                                Previous
-                            </button>
-                            
-                            {Array.from({ length: recentSales?.last_page }, (_, i) => i + 1).map(page => (
-                                <button
-                                    key={page}
-                                    onClick={() => goToPage(page)}
-                                    className={`px-3 py-2 rounded-lg text-sm font-medium ${
-                                        currentPage === page
-                                            ? 'bg-blue-600 text-white'
-                                            : 'border border-gray-300 text-gray-700 hover:bg-gray-50'
-                                    }`}
-                                >
-                                    {page}
-                                </button>
-                            ))}
-                            
-                            <button
-                                onClick={() => goToPage(currentPage + 1)}
-                                disabled={currentPage === recentSales?.last_page}
-                                className="px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-                            >
-                                Next
-                            </button>
                         </div>
                     </div>
-                )}
+
+                </section>
             </div>
-            
-            {/* Top Selling Items */}
-            {topItems && topItems.length > 0 && (
-                <div className="bg-white rounded-lg shadow border border-gray-200 p-6">
-                    <h2 className="text-lg font-semibold text-gray-900 mb-6">Top Selling Items</h2>
-                    <div className="space-y-4">
-                        {topItems.map((item, index) => (
-                            <div key={item.item_id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                                <div className="flex items-center gap-4">
-                                    <div className="flex items-center justify-center w-10 h-10 bg-blue-100 rounded-lg font-bold text-blue-600">
-                                        {index + 1}
-                                    </div>
-                                    <div>
-                                        <p className="font-medium text-gray-900">{item.item_name}</p>
-                                        <p className="text-sm text-gray-600">{item.category_name}</p>
-                                    </div>
-                                </div>
-                                <div className="text-right">
-                                    <p className="font-semibold text-gray-900">{formatNumber(item.quantity)} sold</p>
-                                    <p className="text-sm text-gray-600">{formatPeso(item.revenue)}</p>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            )}
         </AdminLayout>
     );
 }

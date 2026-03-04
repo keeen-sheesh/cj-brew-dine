@@ -24,12 +24,12 @@ class RedirectIfAuthenticated
                 $user = Auth::user();
                 
                 // Redirect based on user role
-                if ($user->isAdmin()) {
+                if ($user->isAdmin() || $user->isRestoAdmin()) {
                     return redirect()->route('admin.dashboard');
                 } elseif ($user->isKitchen()) {
-                    return redirect('/kitchen');
-                } elseif ($user->isResto() || $user->isRestoAdmin()) {
-                    return redirect('/cashier');
+                    return redirect('/admin/kitchen');
+                } elseif ($user->isResto() || $user->hasRole('cashier')) {
+                    return redirect('/cashier/dashboard');
                 } elseif ($user->isCustomer()) {
                     return redirect('/menu');
                 }

@@ -14,7 +14,7 @@ class Category extends Model
         'description',
         'sort_order',
         'is_active',
-        'is_kitchen_category'
+        'parent_id'
     ];
 
     protected $casts = [
@@ -27,6 +27,36 @@ class Category extends Model
     public function items()
     {
         return $this->hasMany(Item::class)->orderBy('sort_order', 'asc');
+    }
+
+    // Relationship with subcategories
+    public function subcategories()
+    {
+        return $this->hasMany(Category::class, 'parent_id')->orderBy('sort_order', 'asc');
+    }
+
+    // Relationship with parent category
+    public function parent()
+    {
+        return $this->belongsTo(Category::class, 'parent_id');
+    }
+
+    // Relationship with all children (recursive)
+    public function children()
+    {
+        return $this->hasMany(Category::class, 'parent_id')->with('children');
+    }
+
+    // Scope for main categories (no parent)
+    public function scopeMainCategories($query)
+    {
+        return $query->whereNull('parent_id');
+    }
+
+    // Scope for subcategories
+    public function scopeSubcategories($query)
+    {
+        return $query->whereNotNull('parent_id');
     }
 
     // Scope for active categories

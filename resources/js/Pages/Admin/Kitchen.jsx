@@ -44,18 +44,14 @@ import {
   CalendarClock,
   ListFilter,
   ChevronsUpDown,
-  LogOut
+  Maximize,
+  Minimize
 } from 'lucide-react';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 import { format, subDays, startOfWeek, endOfWeek, startOfMonth, endOfMonth, isToday, isSameDay } from 'date-fns';
 
-export default function Kitchen({ orders = [], hasNewOrder: initialHasNewOrder }) {
-  const BASE_PATH = typeof window !== 'undefined' && window.location?.pathname?.startsWith('/admin/kitchen')
-    ? '/admin/kitchen'
-    : '/kitchen';
-  const IS_ADMIN_WRAPPER = typeof window !== 'undefined' && window.location?.pathname?.startsWith('/admin/kitchen');
-  const Wrapper = ({ children }) => IS_ADMIN_WRAPPER ? <AdminLayout>{children}</AdminLayout> : <>{children}</>;
+export default function Kitchen({ orders = [], hasNewOrder: initialHasNewOrder, stats = {} }) {
   const [activeTab, setActiveTab] = useState('pending');
   const [notification, setNotification] = useState(null);
   const [soundEnabled, setSoundEnabled] = useState(true);
@@ -70,16 +66,28 @@ export default function Kitchen({ orders = [], hasNewOrder: initialHasNewOrder }
   });
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState('connected');
-  const [lastOrderCount, setLastOrderCount] = useState(orders.length);
+  const [showControlPanel, setShowControlPanel] = useState(false);
+  const [isFullScreen, setIsFullScreen] = useState(false);
+  
+  // Unified confirmation modal state
+  const [confirmModal, setConfirmModal] = useState({ show: false, orderId: null, action: null, message: '' });
   
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
   const ordersPerPage = 10;
 
   const audioRef = useRef(null);
+  const soundSourcesRef = useRef([]);
+  const soundSourceIndexRef = useRef(0);
   const pollTimeoutRef = useRef(null);
+  const pollInFlightRef = useRef(false);
+  const lastPollSinceRef = useRef(Math.floor(Date.now() / 1000));
   const mountedRef = useRef(true);
   const datePickerRef = useRef(null);
+  // Track seen order IDs to detect genuinely new orders
+  const seenOrderIdsRef = useRef(new Set());
+  const notifiedOrderIdsRef = useRef(new Set());
+  const isFirstLoadRef = useRef(true);
 
   // Date filter options
   const dateFilterOptions = [
@@ -182,16 +190,42 @@ export default function Kitchen({ orders = [], hasNewOrder: initialHasNewOrder }
 
   // Initialize audio element
   useEffect(() => {
-    audioRef.current = new Audio('/sound1.mp3');
+    const pathPrefix = window.location.pathname.includes('/admin/')
+      ? window.location.pathname.split('/admin/')[0]
+      : '';
+    const prefixedSource = `${pathPrefix}/sound1.mp3`.replace(/\/{2,}/g, '/');
+    soundSourcesRef.current = Array.from(new Set([prefixedSource, '/sound1.mp3']));
+    soundSourceIndexRef.current = 0;
+
+    audioRef.current = new Audio(soundSourcesRef.current[soundSourceIndexRef.current]);
     audioRef.current.volume = 0.7;
     audioRef.current.preload = 'auto';
     
-    audioRef.current.addEventListener('error', (e) => {
-      console.error('Sound file failed to load:', e);
+    audioRef.current.addEventListener('error', () => {
+      const nextSource = soundSourcesRef.current[soundSourceIndexRef.current + 1];
+      if (nextSource && audioRef.current) {
+        soundSourceIndexRef.current += 1;
+        audioRef.current.src = nextSource;
+        audioRef.current.load();
+        return;
+      }
+
+      console.error('Sound file failed to load:', {
+        src: audioRef.current?.currentSrc || 'unknown',
+        code: audioRef.current?.error?.code,
+      });
     });
     
     if ("Notification" in window && Notification.permission !== "granted" && Notification.permission !== "denied") {
       Notification.requestPermission();
+    }
+    
+    // Seed seenOrderIdsRef with current order IDs to avoid false positives on first poll
+    if (orders && Array.isArray(orders)) {
+      const initialOrderIds = orders.map(o => o.id);
+      seenOrderIdsRef.current = new Set(initialOrderIds);
+      notifiedOrderIdsRef.current = new Set(initialOrderIds);
+      console.log('Seeded seen order IDs:', initialOrderIds);
     }
     
     return () => {
@@ -228,19 +262,35 @@ export default function Kitchen({ orders = [], hasNewOrder: initialHasNewOrder }
 
   // Play alarm function
   const playAlarm = useCallback(() => {
-    if (!soundEnabled || !audioSystemReady || !audioRef.current) {
-      if (!audioSystemReady && soundEnabled) {
-        console.log('Audio not ready. User must click enable button.');
-      }
+    if (!soundEnabled) {
       return;
     }
-    
-    audioRef.current.currentTime = 0;
-    audioRef.current.play().catch(error => {
+
+    if (!audioRef.current) {
+      console.warn('Audio element not available');
+      return;
+    }
+
+    try {
+      // Reset and play audio
+      audioRef.current.currentTime = 0;
+      const playPromise = audioRef.current.play();
+      
+      if (playPromise !== undefined) {
+        playPromise
+          .then(() => {
+            console.log('Alarm sound played successfully');
+          })
+          .catch(error => {
+            console.warn('Alarm playback failed:', error.message);
+            // If audio fails, don't reset audioSystemReady flag
+            // User can still use the system and try again
+          });
+      }
+    } catch (error) {
       console.error('Unexpected play error:', error);
-      setAudioSystemReady(false);
-    });
-  }, [soundEnabled, audioSystemReady]);
+    }
+  }, [soundEnabled]);
 
   // Cleanup polling on unmount
   useEffect(() => {
@@ -250,54 +300,145 @@ export default function Kitchen({ orders = [], hasNewOrder: initialHasNewOrder }
     };
   }, []);
 
+  // Track fullscreen state changes
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullScreen(!!document.fullscreenElement);
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
+  }, []);
+
+  // Sync seen order IDs when orders prop changes (initial load or date filter change)
+  useEffect(() => {
+    if (orders && Array.isArray(orders) && orders.length > 0) {
+      const orderIds = orders.map(o => o.id);
+      // Only seed if the set is empty (first load) to avoid overriding during date filter changes
+      if (seenOrderIdsRef.current.size === 0) {
+        seenOrderIdsRef.current = new Set(orderIds);
+        notifiedOrderIdsRef.current = new Set(orderIds);
+        console.log('Initialized seen order IDs from prop:', orderIds);
+      }
+    }
+  }, [orders]);
+
   // Poll for updates
   const pollForUpdates = useCallback(async () => {
-    if (!mountedRef.current) return;
+    if (!mountedRef.current || pollInFlightRef.current) return;
+    pollInFlightRef.current = true;
+    let nextDelayMs = 3000;
     
     try {
-      const formattedDate = selectedDate.toISOString().split('T')[0];
-      const response = await fetch(`${BASE_PATH}/check-new?date=${formattedDate}&since=${Date.now()}`, {
+      const formattedDate = format(selectedDate, 'yyyy-MM-dd');
+      const response = await fetch(`/admin/kitchen/check-new?date=${formattedDate}&since=${lastPollSinceRef.current}`, {
         method: 'GET',
+        credentials: 'same-origin',
         headers: {
           'Accept': 'application/json',
           'X-Requested-With': 'XMLHttpRequest',
-          'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content,
+          'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content'),
         },
       });
       
       if (!mountedRef.current) return;
-      
-      if (response.ok) {
-        const data = await response.json();
-        setConnectionStatus('connected');
-        
-        if (data.orders) {
-          const newOrderCount = data.orders.length;
-          const oldOrderCount = kitchenOrders.length;
-          
-          setKitchenOrders(data.orders);
-          setLastOrderCount(newOrderCount);
-          
-          if (soundEnabled && audioSystemReady && newOrderCount > oldOrderCount) {
-            playAlarm();
-            showNotification('🔔 New Order!', 'A new kitchen order has arrived', 'success');
+
+      if (response.status === 401) {
+        setConnectionStatus('disconnected');
+        showNotification('Session expired', 'Please login again', 'error');
+        mountedRef.current = false;
+        window.location.href = '/login';
+        return;
+      }
+
+      if (response.status === 419) {
+        setConnectionStatus('disconnected');
+        showNotification('Session refreshed', 'Reloading page...', 'info');
+        mountedRef.current = false;
+        window.location.reload();
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(`Connection failed (${response.status})`);
+      }
+
+      const data = await response.json();
+      setConnectionStatus('connected');
+
+      // Auto-initialize audio system on first successful connection
+      if (!audioSystemReady && audioRef.current) {
+        try {
+          const playPromise = audioRef.current.play();
+          if (playPromise !== undefined) {
+            playPromise
+              .then(() => {
+                audioRef.current.pause();
+                audioRef.current.currentTime = 0;
+                setAudioSystemReady(true);
+                console.log('Audio system auto-initialized');
+              })
+              .catch(err => {
+                console.log('Audio autoplay blocked by browser policy (normal)', err.message);
+              });
           }
+        } catch (err) {
+          console.log('Audio init attempt:', err.message);
         }
+      }
+
+      const nextSinceRaw = Number(data?.timestamp) || Math.floor(Date.now() / 1000);
+      lastPollSinceRef.current = nextSinceRaw > 1000000000000
+        ? Math.floor(nextSinceRaw / 1000)
+        : nextSinceRaw;
+      
+      if (data.orders) {
+        // Get current order IDs from the response
+        const currentOrderIds = data.orders.map(o => o.id);
         
-        if (mountedRef.current) {
-          pollTimeoutRef.current = setTimeout(pollForUpdates, 3000);
+        // Find genuinely new orders by checking against previously seen IDs
+        const newOrderIds = currentOrderIds.filter(id => !seenOrderIdsRef.current.has(id));
+        const unnotifiedNewOrderIds = newOrderIds.filter(
+          id => !notifiedOrderIdsRef.current.has(id)
+        );
+        const hasNewOrders = unnotifiedNewOrderIds.length > 0;
+        
+        // Update the seen order IDs set
+        seenOrderIdsRef.current = new Set(currentOrderIds);
+        unnotifiedNewOrderIds.forEach(id => notifiedOrderIdsRef.current.add(id));
+        
+        setKitchenOrders(data.orders);
+        
+        // Only show notification if there are truly new orders
+        // Skip on first load - don't play sound on initial page load
+        if (isFirstLoadRef.current) {
+          isFirstLoadRef.current = false;
+        } else if (soundEnabled && audioSystemReady && hasNewOrders) {
+          console.log('New orders detected, playing alarm:', { unnotifiedNewOrderIds, hasNewOrders });
+          playAlarm();
+          showNotification(
+            '🔔 New Order!',
+            unnotifiedNewOrderIds.length > 1
+              ? `${unnotifiedNewOrderIds.length} new kitchen orders arrived`
+              : 'A new kitchen order has arrived',
+            'success'
+          );
         }
-      } else {
-        throw new Error('Connection failed');
       }
     } catch (error) {
       console.error('Polling error:', error);
       setConnectionStatus('disconnected');
+      nextDelayMs = 5000;
+    } finally {
+      pollInFlightRef.current = false;
       if (mountedRef.current) {
-        pollTimeoutRef.current = setTimeout(pollForUpdates, 5000);
+        if (pollTimeoutRef.current) clearTimeout(pollTimeoutRef.current);
+        pollTimeoutRef.current = setTimeout(pollForUpdates, nextDelayMs);
       }
     }
-  }, [selectedDate, soundEnabled, audioSystemReady, kitchenOrders.length, playAlarm]);
+  }, [selectedDate, soundEnabled, audioSystemReady, playAlarm]);
 
   // Start polling
   useEffect(() => {
@@ -336,8 +477,16 @@ export default function Kitchen({ orders = [], hasNewOrder: initialHasNewOrder }
   };
 
   const showNotification = (title, message, type = 'info') => {
-    setNotification({ title, message, type });
-    setTimeout(() => setNotification(null), 3000);
+    // Clear existing notification before showing new one (prevent stacking)
+    if (notification) {
+      setNotification(null);
+    }
+    
+    // Use a small delay to ensure the DOM updates
+    setTimeout(() => {
+      setNotification({ title, message, type });
+      setTimeout(() => setNotification(null), 3000);
+    }, 50);
   };
 
   const closeNotification = () => setNotification(null);
@@ -364,73 +513,98 @@ export default function Kitchen({ orders = [], hasNewOrder: initialHasNewOrder }
 
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen();
+      document.documentElement.requestFullscreen().then(() => {
+        setIsFullScreen(true);
+      }).catch(err => {
+        console.error('Error attempting to enable fullscreen:', err);
+      });
     } else {
       if (document.exitFullscreen) {
-        document.exitFullscreen();
+        document.exitFullscreen().then(() => {
+          setIsFullScreen(false);
+        });
       }
     }
   };
 
-  const startPreparing = async (orderId) => {
-    if (!confirm(`Start preparing order #${orderId}?`)) return;
-    
+  // Unified function to update order status
+  const updateOrderStatus = async (orderId, action) => {
     setProcessingOrder(orderId);
     
+    const endpoint = action === 'start' ? 'start' : 'ready';
+    const successMessage = action === 'start' 
+      ? { title: '✅ Started', message: `Order #${orderId} is now preparing` }
+      : { title: '✅ Ready for Pickup', message: `Order #${orderId} is ready for pickup` };
+    const newStatus = action === 'start' ? 'preparing' : 'ready';
+    
     try {
-      const response = await fetch(`${BASE_PATH}/orders/${orderId}/start`, {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+      
+      const response = await fetch(`/admin/kitchen/orders/${orderId}/${endpoint}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content,
+          'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content'),
+          'Accept': 'application/json'
         },
+        signal: controller.signal
       });
       
-      const data = await response.json();
+      clearTimeout(timeoutId);
+      
+      // Check response status first
+      if (!response.ok) {
+        if (response.status === 419) {
+          showNotification('⚠️ Session Expired', 'Please refresh the page and try again', 'error');
+          return;
+        }
+        throw new Error(`Server error (${response.status})`);
+      }
+      
+      // Only try to parse JSON if response is valid
+      let data;
+      try {
+        data = await response.json();
+      } catch (e) {
+        console.error('Failed to parse response:', e);
+        showNotification('⚠️ Error', 'Invalid server response', 'error');
+        return;
+      }
       
       if (data.success) {
         setKitchenOrders(prev => prev.map(order => 
-          order.id === orderId ? { ...order, kitchen_status: 'preparing' } : order
+          order.id === orderId ? { ...order, kitchen_status: newStatus } : order
         ));
-        showNotification('✅ Started', `Order #${orderId} is now preparing`, 'success');
+        showNotification(successMessage.title, successMessage.message, 'success');
+      } else {
+        showNotification('⚠️ Error', data.message || 'Failed to update order', 'error');
       }
     } catch (error) {
-      console.error('Error:', error);
-      showNotification('❌ Error', 'Failed to start order', 'error');
+      if (error.name === 'AbortError') {
+        showNotification('⏱️ Timeout', 'Request took too long. Please try again.', 'error');
+      } else {
+        console.error('Error:', error);
+        showNotification('❌ Error', 'Failed to update order', 'error');
+      }
     } finally {
       setProcessingOrder(null);
+      setConfirmModal({ show: false, orderId: null, action: null, message: '' });
     }
   };
 
-  // Mark order as ready for pickup
-  const markReady = async (orderId) => {
-    if (!confirm(`Mark order #${orderId} as READY FOR PICKUP?`)) return;
+  // Request confirmation for order actions
+  const requestConfirmation = (orderId, action) => {
+    const message = action === 'start' 
+      ? `Start preparing order #${orderId}?`
+      : `Mark order #${orderId} as READY FOR PICKUP?`;
     
-    setProcessingOrder(orderId);
-    
-    try {
-      const response = await fetch(`${BASE_PATH}/orders/${orderId}/ready`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content,
-        },
-      });
-      
-      const data = await response.json();
-      
-      if (data.success) {
-        setKitchenOrders(prev => prev.map(order => 
-          order.id === orderId ? { ...order, kitchen_status: 'ready' } : order
-        ));
-        showNotification('✅ Ready for Pickup', `Order #${orderId} is ready for pickup`, 'success');
-      }
-    } catch (error) {
-      console.error('Error:', error);
-      showNotification('❌ Error', 'Failed to mark order as ready', 'error');
-    } finally {
-      setProcessingOrder(null);
-    }
+    setConfirmModal({
+      show: true,
+      orderId,
+      action,
+      message
+    });
   };
 
   const refreshOrders = () => {
@@ -584,7 +758,7 @@ export default function Kitchen({ orders = [], hasNewOrder: initialHasNewOrder }
             <div className="flex flex-row sm:flex-col gap-3">
               {order.kitchen_status === 'pending' && (
                 <button
-                  onClick={() => startPreparing(order.id)}
+                  onClick={() => requestConfirmation(order.id, 'start')}
                   disabled={processingOrder === order.id}
                   className="px-6 py-3 bg-white text-red-600 rounded-lg hover:bg-red-100 flex items-center gap-2 transition-all disabled:opacity-50 shadow-md font-bold border-2 border-red-600 text-base hover:scale-105 active:scale-95"
                 >
@@ -599,7 +773,7 @@ export default function Kitchen({ orders = [], hasNewOrder: initialHasNewOrder }
               
               {order.kitchen_status === 'preparing' && (
                 <button
-                  onClick={() => markReady(order.id)}
+                  onClick={() => requestConfirmation(order.id, 'ready')}
                   disabled={processingOrder === order.id}
                   className="px-6 py-3 bg-white text-blue-600 rounded-lg hover:bg-blue-100 flex items-center gap-2 transition-all disabled:opacity-50 shadow-md font-bold border-2 border-blue-600 text-base hover:scale-105 active:scale-95"
                 >
@@ -777,7 +951,7 @@ export default function Kitchen({ orders = [], hasNewOrder: initialHasNewOrder }
                 </div>
                 <div>
                   <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">
-                    Kitchen Display System
+                    Kitchen
                   </h1>
                   <p className="text-sm text-gray-600 mt-1 flex items-center gap-2">
                     <Clock className="w-4 h-4" />
@@ -785,38 +959,22 @@ export default function Kitchen({ orders = [], hasNewOrder: initialHasNewOrder }
                   </p>
                 </div>
               </div>
-              
-              <div className="flex flex-wrap items-center gap-3">
-                <ConnectionStatusBadge />
-                
-                <div className="flex items-center gap-2 px-4 py-2 bg-white rounded-lg shadow-sm border border-gray-200">
-                  <div className="flex items-center gap-1.5 px-2 py-1 bg-red-50 text-red-700 rounded-full border border-red-200">
-                    <div className="w-2 h-2 rounded-full bg-red-500"></div>
-                    <span className="text-xs font-medium">{pendingOrders.length}</span>
-                  </div>
-                  <div className="flex items-center gap-1.5 px-2 py-1 bg-yellow-50 text-yellow-700 rounded-full border border-yellow-200">
-                    <div className="w-2 h-2 rounded-full bg-yellow-500"></div>
-                    <span className="text-xs font-medium">{preparingOrders.length}</span>
-                  </div>
-                  <div className="flex items-center gap-1.5 px-2 py-1 bg-blue-50 text-blue-700 rounded-full border border-blue-200">
-                    <div className="w-2 h-2 rounded-full bg-blue-500"></div>
-                    <span className="text-xs font-medium">{readyOrders.length}</span>
-                  </div>
-                  <div className="flex items-center gap-1.5 px-2 py-1 bg-green-50 text-green-700 rounded-full border border-green-200">
-                    <div className="w-2 h-2 rounded-full bg-green-500"></div>
-                    <span className="text-xs font-medium">{completedOrders.length}</span>
-                  </div>
-                </div>
 
-                {!IS_ADMIN_WRAPPER && (
-                  <button
-                    onClick={() => (window.location.href = '/logout')}
-                    className="p-2 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
-                    title="Logout"
-                  >
-                    <LogOut className="w-4 h-4" />
-                  </button>
-                )}
+              {/* Header-level controls */}
+              <div className="flex items-center gap-2">
+                <ConnectionStatusBadge />
+                <button
+                  onClick={() => setShowControlPanel(!showControlPanel)}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all border ${
+                    showControlPanel
+                      ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                      : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                  }`}
+                >
+                  <ChefHat className="w-4 h-4" />
+                  Controls
+                  <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showControlPanel ? 'rotate-180' : ''}`} />
+                </button>
               </div>
             </div>
 
@@ -952,62 +1110,60 @@ export default function Kitchen({ orders = [], hasNewOrder: initialHasNewOrder }
                 >
                   This Month
                 </button>
+
               </div>
-
-              {/* Enable Audio Button */}
-              <button
-                onClick={initializeAudioSystem}
-                className={`flex items-center gap-2 px-3 py-2 rounded-lg shadow-sm border transition-all ${
-                  audioSystemReady 
-                    ? 'bg-green-100 text-green-700 border-green-300 hover:bg-green-200' 
-                    : 'bg-amber-100 text-amber-700 border-amber-300 hover:bg-amber-200 animate-pulse'
-                }`}
-                title={audioSystemReady ? "Audio system ready" : "Click to enable sounds"}
-              >
-                <Volume1 className="w-4 h-4" />
-                <span className="text-sm font-medium">
-                  {audioSystemReady ? 'Audio Ready' : 'Enable Audio'}
-                </span>
-              </button>
-
-              <button
-                onClick={toggleSound}
-                className={`p-2 rounded-lg ${
-                  soundEnabled 
-                    ? 'bg-green-600 text-white hover:bg-green-700' 
-                    : 'bg-gray-500 text-white hover:bg-gray-600'
-                }`}
-                title={soundEnabled ? "Sound On" : "Sound Off"}
-              >
-                {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
-              </button>
-
-              <button
-                onClick={testAlarm}
-                className="p-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700"
-                title="Test Alarm"
-              >
-                <Bell className="w-4 h-4" />
-              </button>
-
-              <button
-                onClick={toggleFullscreen}
-                className="p-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
-                title="Fullscreen"
-              >
-                {document.fullscreenElement ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
-              </button>
-
-              <button
-                onClick={refreshOrders}
-                disabled={processingOrder !== null}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2 transition-colors disabled:opacity-50"
-              >
-                <RefreshCw className={`w-4 h-4 ${processingOrder ? 'animate-spin' : ''}`} />
-                Refresh
-              </button>
             </div>
           </div>
+
+          {/* DASHBOARD CONTROL PANEL */}
+          {showControlPanel && (
+            <div className="mb-6 flex flex-wrap items-center gap-3 p-4 bg-white rounded-xl border border-gray-200 shadow-sm">
+              {/* Audio Status */}
+              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium border ${
+                audioSystemReady
+                  ? 'bg-green-50 text-green-700 border-green-200'
+                  : 'bg-red-50 text-red-700 border-red-200'
+              }`}>
+                <div className={`w-2 h-2 rounded-full ${audioSystemReady ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
+                Audio {audioSystemReady ? 'Ready' : 'Not Ready'}
+              </div>
+
+              <div className="w-px h-5 bg-gray-200" />
+
+              {/* Sound Toggle */}
+              <button
+                onClick={toggleSound}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
+                  soundEnabled
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                    : 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200'
+                }`}
+              >
+                {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+                Sound {soundEnabled ? 'On' : 'Off'}
+              </button>
+
+              {/* Test Alarm */}
+              <button
+                onClick={testAlarm}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 transition-colors"
+              >
+                <Bell className="w-4 h-4" />
+                Test Alarm
+              </button>
+
+              <div className="w-px h-5 bg-gray-200" />
+
+              {/* Fullscreen */}
+              <button
+                onClick={toggleFullscreen}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium border border-gray-200 bg-gray-50 text-gray-700 hover:bg-gray-100 transition-colors"
+              >
+                {isFullScreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+                {isFullScreen ? 'Exit Fullscreen' : 'Fullscreen'}
+              </button>
+            </div>
+          )}
 
           {/* CUSTOM TAB NAVIGATION */}
           <div className="mb-6 border-b border-gray-200">
@@ -1248,87 +1404,56 @@ export default function Kitchen({ orders = [], hasNewOrder: initialHasNewOrder }
             )}
           </div>
 
-          {/* STATS CARDS */}
-          <div className="mt-6 grid grid-cols-1 sm:grid-cols-5 gap-4">
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-gray-600">Total Orders</p>
-                  <p className="text-2xl font-bold text-gray-900">{filteredKitchenOrders.length}</p>
+
+        </div>
+      </div>
+
+      {/* Unified Confirmation Modal */}
+      {confirmModal.show && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-sm w-full">
+            <div className="p-6 border-b border-gray-200">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-yellow-100 rounded-full">
+                  <AlertCircle className="w-6 h-6 text-yellow-600" />
                 </div>
-                <div className="p-3 bg-red-100 rounded-lg">
-                  <Utensils className="w-6 h-6 text-red-600" />
-                </div>
+                <h3 className="text-lg font-bold text-gray-900">
+                  {confirmModal.action === 'start' ? 'Start Preparing' : 'Ready for Pickup'}
+                </h3>
               </div>
             </div>
-            
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-gray-600">Pending</p>
-                  <p className="text-2xl font-bold text-red-600">{pendingOrders.length}</p>
-                </div>
-                <div className="p-3 bg-red-100 rounded-lg">
-                  <AlertOctagon className="w-6 h-6 text-red-600" />
-                </div>
-              </div>
+
+            <div className="p-6">
+              <p className="text-gray-700 text-center">
+                {confirmModal.message}
+              </p>
             </div>
-            
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-gray-600">In Progress</p>
-                  <p className="text-2xl font-bold text-yellow-600">{preparingOrders.length}</p>
-                </div>
-                <div className="p-3 bg-yellow-100 rounded-lg">
-                  <Construction className="w-6 h-6 text-yellow-600" />
-                </div>
-              </div>
-            </div>
-            
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-gray-600">Ready</p>
-                  <p className="text-2xl font-bold text-blue-600">{readyOrders.length}</p>
-                </div>
-                <div className="p-3 bg-blue-100 rounded-lg">
-                  <Package className="w-6 h-6 text-blue-600" />
-                </div>
-              </div>
-            </div>
-            
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-gray-600">Completed</p>
-                  <p className="text-2xl font-bold text-green-600">{completedOrders.length}</p>
-                </div>
-                <div className="p-3 bg-green-100 rounded-lg">
-                  <BadgeCheck className="w-6 h-6 text-green-600" />
-                </div>
-              </div>
-            </div>
-          </div>
-          
-          <div className="mt-4 bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <ListFilter className="w-4 h-4 text-gray-500" />
-                <p className="text-sm text-gray-600">Current Filter:</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="px-3 py-1 bg-gray-100 text-gray-700 rounded-full text-xs font-medium border border-gray-200">
-                  {getDateRangeDisplay()}
-                </span>
-                <span className="px-3 py-1 bg-blue-50 text-blue-700 rounded-full text-xs font-medium border border-blue-200">
-                  {activeTab.charAt(0).toUpperCase() + activeTab.slice(1)} Orders
-                </span>
-              </div>
+
+            <div className="p-6 border-t border-gray-200 flex justify-end gap-3">
+              <button
+                onClick={() => setConfirmModal({ show: false, orderId: null, action: null, message: '' })}
+                className="px-4 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => updateOrderStatus(confirmModal.orderId, confirmModal.action)}
+                disabled={processingOrder === confirmModal.orderId}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium disabled:opacity-50 flex items-center gap-2"
+              >
+                {processingOrder === confirmModal.orderId ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    Processing...
+                  </>
+                ) : (
+                  'Confirm'
+                )}
+              </button>
             </div>
           </div>
         </div>
-      </div>
+      )}
 
       <style>{`
         @keyframes slide-in {

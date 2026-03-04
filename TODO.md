@@ -1,25 +1,20 @@
-# Fix Inventory System 404 Errors
+# Fix Kitchen Order Sound Notification
 
-## Issues:
-1. Page resolution mismatch - app.jsx looks for .jsx files but inventory pages are .tsx
-2. API 404 errors - /api/items endpoint not found
+## Task
+Fix the sound notification when new orders arrive in the Kitchen Dashboard
 
-## Steps:
+## Issue Identified
+- The polling logic compares total order count (`newOrderCount > lastOrderCount`), which only works when there are MORE orders
+- It doesn't detect new orders that replace old ones or when page is freshly loaded
+- The `lastOrderCount` is initialized with current orders length, so it never triggers properly
 
-### Step 1: Fix app.jsx page resolution
-- [x] Update app.jsx to support both .jsx and .tsx files
-- [x] Change glob pattern to include all file extensions
+## Solution
+1. Track seen order IDs to detect genuinely NEW orders
+2. Use the `has_new_orders` flag from the API response properly
+3. Ensure sound plays only for truly new orders
 
-### Step 2: Clear Laravel caches
-- [x] Clear route cache
-- [x] Clear config cache
-- [x] Clear view cache
-
-### Step 3: Verify API routes are loaded
-- [x] Check RouteServiceProvider loads api.php
-- [ ] Test API endpoints
-
-
-### Step 4: Test the fixes
-- [ ] Test inventory pages load without 404
-- [ ] Test API endpoints return data
+## Steps
+- [ ] Add a ref to track seen order IDs in Kitchen.jsx
+- [ ] Update pollForUpdates to detect new order IDs
+- [ ] Use the `has_new_orders` flag from API response
+- [ ] Play alarm only when genuinely new orders arrive

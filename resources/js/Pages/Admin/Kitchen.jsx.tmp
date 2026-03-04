@@ -1,0 +1,319 @@
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import AdminLayout from '@/Layouts/AdminLayout';
+import { Head, router } from '@inertiajs/react';
+import { 
+  Clock, 
+  CheckCircle, 
+  Bell, 
+  RefreshCw,
+  Play,
+  X,
+  AlertCircle,
+  Utensils,
+  Volume2,
+  VolumeX,
+  ChefHat,
+  Coffee,
+  Pizza,
+  Sandwich,
+  Soup,
+  Salad,
+  Wine,
+  Beer,
+  GlassWater,
+  Calendar,
+  Wifi,
+  WifiOff,
+  AlertOctagon,
+  Construction,
+  BadgeCheck,
+  ChevronLeft,
+  ChevronRight,
+  Building2,
+  MessageSquare,
+  Maximize2,
+  Minimize2,
+  Volume1,
+  Package,
+  CalendarDays,
+  ChevronDown,
+  Filter,
+  CalendarRange,
+  CalendarCheck,
+  CalendarX,
+  CalendarClock,
+  ListFilter,
+  ChevronsUpDown,
+  Maximize,
+  Minimize
+} from 'lucide-react';
+import DatePicker from 'react-datepicker';
+import 'react-datepicker/dist/react-datepicker.css';
+import { format, subDays, startOfWeek, endOfWeek, startOfMonth, endOfMonth, isToday, isSameDay } from 'date-fns';
+
+export default function Kitchen({ orders = [], hasNewOrder: initialHasNewOrder, stats = {} }) {
+  const [activeTab, setActiveTab] = useState('pending');
+  const [notification, setNotification] = useState(null);
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [audioSystemReady, setAudioSystemReady] = useState(false);
+  const [kitchenOrders, setKitchenOrders] = useState(Array.isArray(orders) ? orders : []);
+  const [processingOrder, setProcessingOrder] = useState(null);
+  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [dateFilter, setDateFilter] = useState('today');
+  const [customDateRange, setCustomDateRange] = useState({
+    from: new Date(),
+    to: new Date()
+  });
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState('connected');
+  const [lastOrderCount, setLastOrderCount] = useState(orders.length);
+  const [showControlPanel, setShowControlPanel] = useState(false);
+  const [isFullScreen, setIsFullScreen] = useState(false);
+  
+  // Unified confirmation modal state
+  const [confirmModal, setConfirmModal] = useState({ show: false, orderId: null, action: null, message: '' });
+  
+  // Pagination
+  const [currentPage, setCurrentPage] = useState(1);
+  const ordersPerPage = 10;
+
+  const audioRef = useRef(null);
+  const soundSourcesRef = useRef([]);
+  const soundSourceIndexRef = useRef(0);
+  const pollTimeoutRef = useRef(null);
+  const lastPollSinceRef = useRef(Math.floor(Date.now() / 1000));
+  const mountedRef = useRef(true);
+  const datePickerRef = useRef(null);
+  // Track seen order IDs to detect genuinely new orders
+  const seenOrderIdsRef = useRef(new Set());
+  const isFirstLoadRef = useRef(true);
+
+  // Date filter options
+  const dateFilterOptions = [
+    { value: 'today', label: 'Today', icon: CalendarCheck },
+    { value: 'yesterday', label: 'Yesterday', icon: CalendarX },
+    { value: 'this_week', label: 'This Week', icon: CalendarRange },
+    { value: 'last_week', label: 'Last Week', icon: CalendarRange },
+    { value: 'this_month', label: 'This Month', icon: CalendarClock },
+    { value: 'last_month', label: 'Last Month', icon: CalendarClock },
+    { value: 'custom', label: 'Custom Range', icon: CalendarDays },
+  ];
+
+  // Get date range based on filter
+  const getDateRange = (filter) => {
+    const now = new Date();
+    let from, to;
+
+    switch(filter) {
+      case 'today':
+        from = now;
+        to = now;
+        break;
+      case 'yesterday':
+        from = subDays(now, 1);
+        to = subDays(now, 1);
+        break;
+      case 'this_week':
+        from = startOfWeek(now, { weekStartsOn: 1 }); // Monday
+        to = endOfWeek(now, { weekStartsOn: 1 });
+        break;
+      case 'last_week':
+        from = startOfWeek(subDays(now, 7), { weekStartsOn: 1 });
+        to = endOfWeek(subDays(now, 7), { weekStartsOn: 1 });
+        break;
+      case 'this_month':
+        from = startOfMonth(now);
+        to = endOfMonth(now);
+        break;
+      case 'last_month':
+        from = startOfMonth(subDays(now, 30));
+        to = endOfMonth(subDays(now, 30));
+        break;
+      case 'custom':
+        from = customDateRange.from;
+        to = customDateRange.to;
+        break;
+      default:
+        from = now;
+        to = now;
+    }
+
+    return { from, to };
+  };
+
+  // Filter orders based on date range
+  const filterOrdersByDate = (orders, range) => {
+    if (!range.from || !range.to) return orders;
+    
+    return orders.filter(order => {
+      const orderDate = new Date(order.created_at);
+      const orderDateOnly = new Date(orderDate.getFullYear(), orderDate.getMonth(), orderDate.getDate());
+      const fromDate = new Date(range.from.getFullYear(), range.from.getMonth(), range.from.getDate());
+      const toDate = new Date(range.to.getFullYear(), range.to.getMonth(), range.to.getDate());
+      
+      return orderDateOnly >= fromDate && orderDateOnly <= toDate;
+    });
+  };
+
+  // Get filtered orders
+  const dateRange = getDateRange(dateFilter);
+  const filteredKitchenOrders = filterOrdersByDate(kitchenOrders, dateRange);
+
+  // Filter orders by status
+  const pendingOrders = filteredKitchenOrders.filter(o => o && o.kitchen_status === 'pending');
+  const preparingOrders = filteredKitchenOrders.filter(o => o && o.kitchen_status === 'preparing');
+  const readyOrders = filteredKitchenOrders.filter(o => o && o.kitchen_status === 'ready');
+  const completedOrders = filteredKitchenOrders.filter(o => o && o.kitchen_status === 'completed');
+
+  // Get current orders based on active tab
+  const getCurrentOrders = () => {
+    switch(activeTab) {
+      case 'pending': return pendingOrders;
+      case 'preparing': return preparingOrders;
+      case 'ready': return readyOrders;
+      case 'completed': return completedOrders;
+      default: return [];
+    }
+  };
+
+  const allOrders = getCurrentOrders();
+  const totalPages = Math.ceil(allOrders.length / ordersPerPage);
+  const indexOfLastOrder = currentPage * ordersPerPage;
+  const indexOfFirstOrder = indexOfLastOrder - ordersPerPage;
+  const currentOrders = allOrders.slice(indexOfFirstOrder, indexOfLastOrder);
+
+  // Reset pagination on tab change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [activeTab, dateFilter]);
+
+  // Initialize audio element
+  useEffect(() => {
+    const pathPrefix = window.location.pathname.includes('/admin/')
+      ? window.location.pathname.split('/admin/')[0]
+      : '';
+    const prefixedSource = `${pathPrefix}/sound1.mp3`.replace(/\/{2,}/g, '/');
+    soundSourcesRef.current = Array.from(new Set([prefixedSource, '/sound1.mp3']));
+    soundSourceIndexRef.current = 0;
+
+    audioRef.current = new Audio(soundSourcesRef.current[soundSourceIndexRef.current]);
+    audioRef.current.volume = 0.7;
+    audioRef.current.preload = 'auto';
+    
+    audioRef.current.addEventListener('error', () => {
+      const nextSource = soundSourcesRef.current[soundSourceIndexRef.current + 1];
+      if (nextSource && audioRef.current) {
+        soundSourceIndexRef.current += 1;
+        audioRef.current.src = nextSource;
+        audioRef.current.load();
+        return;
+      }
+
+      console.error('Sound file failed to load:', {
+        src: audioRef.current?.currentSrc || 'unknown',
+        code: audioRef.current?.error?.code,
+      });
+    });
+    
+    if ("Notification" in window && Notification.permission !== "granted" && Notification.permission !== "denied") {
+      Notification.requestPermission();
+    }
+    
+    // Seed seenOrderIdsRef with current order IDs to avoid false positives on first poll
+    if (orders && Array.isArray(orders)) {
+      const initialOrderIds = orders.map(o => o.id);
+      seenOrderIdsRef.current = new Set(initialOrderIds);
+      console.log('Seeded seen order IDs:', initialOrderIds);
+    }
+    
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.src = '';
+        audioRef.current.load();
+      }
+    };
+  }, []);
+
+  // Initialize audio system (must be called from user gesture)
+  const initializeAudioSystem = useCallback(() => {
+    if (audioSystemReady || !audioRef.current) return;
+
+    console.log('Initializing audio system via user gesture...');
+    
+    const playPromise = audioRef.current.play();
+    
+    if (playPromise !== undefined) {
+      playPromise
+        .then(() => {
+          audioRef.current.pause();
+          audioRef.current.currentTime = 0;
+          setAudioSystemReady(true);
+          console.log('Audio system ready.');
+          showNotification('🔊 Audio Ready', 'Sound system initialized successfully', 'success');
+        })
+        .catch(error => {
+          console.log('Audio initialization needs a direct user gesture.', error);
+        });
+    }
+  }, [audioSystemReady]);
+
+  // Play alarm function
+  const playAlarm = useCallback(() => {
+    if (!soundEnabled) {
+      return;
+    }
+
+    if (!audioRef.current) {
+      console.warn('Audio element not available');
+      return;
+    }
+
+    try {
+      // Reset and play audio
+      audioRef.current.currentTime = 0;
+      const playPromise = audioRef.current.play();
+      
+      if (playPromise !== undefined) {
+        playPromise
+          .then(() => {
+            console.log('Alarm sound played successfully');
+          })
+          .catch(error => {
+            console.warn('Alarm playback failed:', error.message);
+            // If audio fails, don't reset audioSystemReady flag
+            // User can still use the system and try again
+          });
+      }
+    } catch (error) {
+      console.error('Unexpected play error:', error);
+    }
+  }, [soundEnabled]);
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      if (pollTimeoutRef.current) clearTimeout(pollTimeoutRef.current);
+    };
+  }, []);
+
+  // Track fullscreen state changes
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullScreen(!!document.fullscreenElement);
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
+  }, []);
+
+  // Sync seen order IDs when orders prop changes (initial load or date filter change)
+  useEffect(() => {
+    if (orders && Array.isArray(orders) && orders.length > 0) {
+      const orderIds = orders.map(o => o.id);
+      // Only seed if the set is empty (first load) to avoid overriding during date filter changes
+      if (seenOrderIdsRef.current.size === 0) {
+        seenOrderIdsRef.current = new Set(orderIds);
