@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Head, Link, router } from '@inertiajs/react';
 import AdminLayout from '@/Layouts/AdminLayout';
 import {
@@ -27,6 +27,365 @@ const formatNumber = (num) => {
     return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 };
 
+// Role icons and colors
+const roleConfig = {
+    admin: {
+        icon: Crown,
+        color: 'from-purple-500 to-purple-600',
+        bgColor: 'bg-purple-50',
+        textColor: 'text-purple-700',
+        borderColor: 'border-purple-200',
+        label: 'Admin'
+    },
+    resto_admin: {
+        icon: Building2,
+        color: 'from-blue-500 to-blue-600',
+        bgColor: 'bg-blue-50',
+        textColor: 'text-blue-700',
+        borderColor: 'border-blue-200',
+        label: 'Resto Admin'
+    },
+    resto: {
+        icon: Coffee,
+        color: 'from-emerald-500 to-emerald-600',
+        bgColor: 'bg-emerald-50',
+        textColor: 'text-emerald-700',
+        borderColor: 'border-emerald-200',
+        label: 'Resto Staff'
+    },
+    kitchen: {
+        icon: ChefHat,
+        color: 'from-amber-500 to-amber-600',
+        bgColor: 'bg-amber-50',
+        textColor: 'text-amber-700',
+        borderColor: 'border-amber-200',
+        label: 'Kitchen Staff'
+    },
+    customer: {
+        icon: UserCircle,
+        color: 'from-gray-500 to-gray-600',
+        bgColor: 'bg-gray-50',
+        textColor: 'text-gray-700',
+        borderColor: 'border-gray-200',
+        label: 'Customer'
+    }
+};
+
+// Status badge mapping
+const getStatusBadge = (status) => {
+    const statusMap = {
+        'completed': { 
+            bg: 'bg-emerald-50', 
+            text: 'text-emerald-700', 
+            border: 'border-emerald-200',
+            dot: 'bg-emerald-500',
+            icon: CheckCircle,
+            label: 'Completed' 
+        },
+        'pending': { 
+            bg: 'bg-amber-50', 
+            text: 'text-amber-700', 
+            border: 'border-amber-200',
+            dot: 'bg-amber-500',
+            icon: Clock,
+            label: 'Pending' 
+        },
+        'preparing': { 
+            bg: 'bg-blue-50', 
+            text: 'text-blue-700', 
+            border: 'border-blue-200',
+            dot: 'bg-blue-500',
+            icon: Coffee,
+            label: 'Preparing' 
+        },
+        'ready': { 
+            bg: 'bg-purple-50', 
+            text: 'text-purple-700', 
+            border: 'border-purple-200',
+            dot: 'bg-purple-500',
+            icon: CheckCircle,
+            label: 'Ready' 
+        },
+        'cancelled': { 
+            bg: 'bg-rose-50', 
+            text: 'text-rose-700', 
+            border: 'border-rose-200',
+            dot: 'bg-rose-500',
+            icon: XCircle,
+            label: 'Cancelled' 
+        },
+    };
+    return statusMap[status] || { 
+        bg: 'bg-gray-50', 
+        text: 'text-gray-700', 
+        border: 'border-gray-200',
+        dot: 'bg-gray-500',
+        icon: Clock,
+        label: status 
+    };
+};
+
+// Order type icon and color
+const getOrderTypeInfo = (type) => {
+    const types = {
+        'dine_in': { icon: Home, bg: 'bg-blue-50', text: 'text-blue-700', label: 'Dine In' },
+        'takeout': { icon: Package, bg: 'bg-amber-50', text: 'text-amber-700', label: 'Takeout' },
+        'delivery': { icon: Truck, bg: 'bg-purple-50', text: 'text-purple-700', label: 'Delivery' },
+    };
+    return types[type] || { icon: ShoppingBag, bg: 'bg-gray-50', text: 'text-gray-700', label: type };
+};
+
+// View All Transactions Modal
+const ViewAllModal = ({ isOpen, onClose, allTransactions = [], onViewDetails }) => {
+    const [localFilter, setLocalFilter] = useState('all');
+    const [searchQuery, setSearchQuery] = useState('');
+    const [currentPage, setCurrentPage] = useState(1);
+    const itemsPerPage = 15;
+
+    // Filter transactions locally
+    const filteredTransactions = allTransactions.filter(transaction => {
+        // Status filter
+        const matchesStatus = localFilter === 'all' || transaction.status === localFilter;
+        
+        // Search filter
+        const matchesSearch = searchQuery === '' || 
+            transaction.customer_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            transaction.order_number?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            transaction.id?.toString().includes(searchQuery);
+        
+        return matchesStatus && matchesSearch;
+    });
+
+    // Pagination
+    const totalPages = Math.ceil(filteredTransactions.length / itemsPerPage);
+    const indexOfLastItem = currentPage * itemsPerPage;
+    const indexOfFirstItem = indexOfLastItem - itemsPerPage;
+    const currentTransactions = filteredTransactions.slice(indexOfFirstItem, indexOfLastItem);
+
+    // Reset page when filter changes
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [localFilter, searchQuery]);
+
+    if (!isOpen) return null;
+
+    return (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl shadow-2xl max-w-6xl w-full max-h-[90vh] overflow-hidden">
+                {/* Header */}
+                <div className="p-6 border-b border-gray-200 bg-gradient-to-r from-blue-500 to-blue-600">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-4">
+                            <div className="p-3 bg-white/20 rounded-xl">
+                                <ShoppingBag className="w-8 h-8 text-white" />
+                            </div>
+                            <div>
+                                <h2 className="text-2xl font-bold text-white">All Transactions</h2>
+                                <p className="text-white/80 text-sm mt-1">
+                                    View and manage all orders
+                                </p>
+                            </div>
+                        </div>
+                        <button 
+                            onClick={onClose}
+                            className="p-2 hover:bg-white/20 rounded-lg transition-colors"
+                        >
+                            <X className="w-5 h-5 text-white" />
+                        </button>
+                    </div>
+                </div>
+
+                {/* Filters */}
+                <div className="p-6 border-b border-gray-200 bg-gray-50">
+                    <div className="flex flex-col md:flex-row gap-4">
+                        {/* Status Filter */}
+                        <div className="flex bg-white border border-gray-300 rounded-lg overflow-hidden">
+                            {['all', 'completed', 'pending', 'preparing', 'ready'].map((filter) => (
+                                <button
+                                    key={filter}
+                                    onClick={() => setLocalFilter(filter)}
+                                    className={`px-4 py-2 text-sm font-medium transition-colors ${
+                                        localFilter === filter
+                                            ? 'bg-blue-600 text-white'
+                                            : 'text-gray-600 hover:bg-gray-50'
+                                    }`}
+                                >
+                                    {filter.charAt(0).toUpperCase() + filter.slice(1)}
+                                </button>
+                            ))}
+                        </div>
+
+                        {/* Search */}
+                        <div className="flex-1 relative">
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                            <input
+                                type="text"
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                placeholder="Search by customer name or order number..."
+                                className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                            />
+                        </div>
+
+                        {/* Results count */}
+                        <div className="flex items-center px-4 py-2 bg-blue-50 text-blue-700 rounded-lg border border-blue-200">
+                            <span className="text-sm font-medium">
+                                {filteredTransactions.length} results
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Table */}
+                <div className="overflow-y-auto" style={{ maxHeight: 'calc(90vh - 200px)' }}>
+                    <table className="w-full">
+                        <thead className="bg-gray-50 sticky top-0">
+                            <tr className="text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                <th className="px-6 py-4">Order</th>
+                                <th className="px-6 py-4">Customer / Cashier</th>
+                                <th className="px-6 py-4">Items</th>
+                                <th className="px-6 py-4">Amount</th>
+                                <th className="px-6 py-4">Status</th>
+                                <th className="px-6 py-4">Time</th>
+                                <th className="px-6 py-4"></th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200">
+                            {currentTransactions.length > 0 ? (
+                                currentTransactions.map((transaction) => {
+                                    const status = getStatusBadge(transaction.status);
+                                    const StatusIcon = status.icon;
+                                    const OrderTypeIcon = getOrderTypeInfo(transaction.order_type).icon;
+                                    const cashierConfig = roleConfig[transaction.cashier_role || 'resto'];
+                                    const CashierIcon = cashierConfig.icon;
+                                    
+                                    return (
+                                        <tr 
+                                            key={transaction.id} 
+                                            className="hover:bg-gray-50 cursor-pointer transition-colors"
+                                            onClick={() => {
+                                                onViewDetails(transaction.id);
+                                                onClose();
+                                            }}
+                                        >
+                                            <td className="px-6 py-4">
+                                                <div className="flex items-center gap-2">
+                                                    <div className={`p-1.5 rounded-lg ${getOrderTypeInfo(transaction.order_type).bg}`}>
+                                                        <OrderTypeIcon className={`w-3 h-3 ${getOrderTypeInfo(transaction.order_type).text}`} />
+                                                    </div>
+                                                    <span className="font-mono font-medium text-gray-900">
+                                                        {transaction.order_number}
+                                                    </span>
+                                                    {transaction.is_hotel && (
+                                                        <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-xs font-medium rounded-full">
+                                                            Hotel
+                                                        </span>
+                                                    )}
+                                                    {transaction.is_personal && (
+                                                        <span className="px-2 py-0.5 bg-pink-100 text-pink-700 text-xs font-medium rounded-full">
+                                                            Personal
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </td>
+                                            <td className="px-6 py-4">
+                                                <div className="space-y-2">
+                                                    {/* Customer */}
+                                                    <div className="flex items-center gap-2">
+                                                        <User className="w-3 h-3 text-gray-400" />
+                                                        <span className="text-sm text-gray-900">{transaction.customer_name}</span>
+                                                    </div>
+                                                    {/* Cashier */}
+                                                    <div className="flex items-center gap-2">
+                                                        <div className={`p-1 rounded ${cashierConfig.bgColor}`}>
+                                                            <CashierIcon className={`w-3 h-3 ${cashierConfig.textColor}`} />
+                                                        </div>
+                                                        <span className={`text-xs font-medium ${cashierConfig.textColor}`}>
+                                                            {transaction.cashier_name || 'Unknown'}
+                                                        </span>
+                                                    </div>
+                                                    {transaction.room_number && (
+                                                        <div className="text-xs text-gray-500">Room #{transaction.room_number}</div>
+                                                    )}
+                                                </div>
+                                            </td>
+                                            <td className="px-6 py-4 text-sm text-gray-600">
+                                                {transaction.items_count} items
+                                            </td>
+                                            <td className="px-6 py-4">
+                                                <span className="font-bold text-gray-900">
+                                                    {formatPeso(transaction.total_amount)}
+                                                </span>
+                                            </td>
+                                            <td className="px-6 py-4">
+                                                <div className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium ${status.bg} ${status.text}`}>
+                                                    <StatusIcon className="w-3 h-3" />
+                                                    {status.label}
+                                                </div>
+                                            </td>
+                                            <td className="px-6 py-4 text-sm text-gray-500">
+                                                {new Date(transaction.created_at).toLocaleTimeString('en-PH', { 
+                                                    hour: '2-digit', 
+                                                    minute: '2-digit' 
+                                                })}
+                                            </td>
+                                            <td className="px-6 py-4">
+                                                <button className="p-1 hover:bg-gray-100 rounded-lg">
+                                                    <MoreHorizontal className="w-4 h-4 text-gray-400" />
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    );
+                                })
+                            ) : (
+                                <tr>
+                                    <td colSpan="7" className="px-6 py-12 text-center">
+                                        <div className="flex flex-col items-center">
+                                            <ShoppingBag className="w-12 h-12 text-gray-300 mb-3" />
+                                            <p className="text-gray-500 font-medium">No transactions found</p>
+                                            <p className="text-sm text-gray-400 mt-1">Try adjusting your filters</p>
+                                        </div>
+                                    </td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+
+                {/* Pagination */}
+                {totalPages > 1 && (
+                    <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex items-center justify-between">
+                        <p className="text-sm text-gray-500">
+                            Showing <span className="font-medium text-gray-700">{indexOfFirstItem + 1}</span> to{' '}
+                            <span className="font-medium text-gray-700">{Math.min(indexOfLastItem, filteredTransactions.length)}</span>{' '}
+                            of <span className="font-medium text-gray-700">{filteredTransactions.length}</span> entries
+                        </p>
+                        <div className="flex gap-2">
+                            <button
+                                onClick={() => setCurrentPage(p => Math.max(p - 1, 1))}
+                                disabled={currentPage === 1}
+                                className="px-3 py-1 border border-gray-300 rounded-lg text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+                            >
+                                Previous
+                            </button>
+                            <span className="px-4 py-1 bg-blue-600 text-white rounded-lg font-medium">
+                                {currentPage}
+                            </span>
+                            <button
+                                onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))}
+                                disabled={currentPage === totalPages}
+                                className="px-3 py-1 border border-gray-300 rounded-lg text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+                            >
+                                Next
+                            </button>
+                        </div>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+};
+
 export default function Dashboard({ 
     auth, 
     stats, 
@@ -35,7 +394,8 @@ export default function Dashboard({
     topItems,
     paymentMethodBreakdown,
     orderTypeBreakdown,
-    filters 
+    filters,
+    allTransactions = [] // Add this prop for all transactions
 }) {
     const [dateRange, setDateRange] = useState(filters?.range || 'today');
     const [showDateDropdown, setShowDateDropdown] = useState(false);

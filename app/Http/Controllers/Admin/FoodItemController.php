@@ -19,7 +19,7 @@ class FoodItemController extends Controller
      */
     public function index(Request $request)
     {
-        $query = Item::with('category')
+        $query = Item::with(['category', 'itemSizes.size'])
             ->orderBy('sort_order', 'asc')
             ->orderBy('created_at', 'desc');
 
@@ -65,11 +65,25 @@ class FoodItemController extends Controller
             return response()->json([
                 'success' => true,
                 'items' => $items->map(function ($item) {
+                    // Format sizes if they exist
+                    $sizes = $item->itemSizes->map(function($itemSize) {
+                        return [
+                            'id' => $itemSize->id,
+                            'size_id' => $itemSize->size_id,
+                            'size_name' => $itemSize->size->name,
+                            'display_name' => $itemSize->size->display_name,
+                            'price' => (float) $itemSize->price,
+                        ];
+                    });
+
                     return [
                         'id' => $item->id,
                         'name' => $item->name,
                         'description' => $item->description,
                         'price' => (float)$item->price,
+                        'price_solo' => (float)$item->price_solo,
+                        'price_whole' => (float)$item->price_whole,
+                        'pricing_type' => $item->pricing_type,
                         'category_id' => $item->category_id,
                         'category_name' => $item->category->name ?? '',
                         'is_available' => (bool)$item->is_available,
@@ -78,6 +92,9 @@ class FoodItemController extends Controller
                         'low_stock_threshold' => (int)$item->low_stock_threshold,
                         'sort_order' => (int)$item->sort_order,
                         'image' => $item->image,
+                        'has_sizes' => $sizes->count() > 0,
+                        'sizes' => $sizes,
+                        'display_price' => $item->display_price,
                     ];
                 }),
             ]);
@@ -105,7 +122,7 @@ class FoodItemController extends Controller
             $validated = $request->validate([
                 'name' => 'required|string|max:255|unique:items,name',
                 'description' => 'nullable|string',
-                'price' => 'required|numeric|min:0',
+                'price' => 'nullable|numeric|min:0',
                 'category_id' => 'required|exists:categories,id',
                 'ingredients' => 'nullable|string',
                 'preparation_time' => 'nullable|integer|min:0',
@@ -115,6 +132,10 @@ class FoodItemController extends Controller
                 'is_available' => 'nullable|boolean',
                 'sort_order' => 'nullable|integer',
                 'image' => 'nullable|image|max:2048',
+                'has_sizes' => 'nullable|boolean',
+                'pricing_type' => 'nullable|in:single,dual',
+                'price_solo' => 'nullable|numeric|min:0',
+                'price_whole' => 'nullable|numeric|min:0',
             ]);
 
             // Handle image upload
@@ -132,6 +153,18 @@ class FoodItemController extends Controller
             // Set defaults
             $validated['is_available'] = isset($validated['is_available']) ? (bool)$validated['is_available'] : true;
             $validated['is_featured'] = isset($validated['is_featured']) ? (bool)$validated['is_featured'] : false;
+            $validated['has_sizes'] = isset($validated['has_sizes']) ? (bool)$validated['has_sizes'] : false;
+            $validated['pricing_type'] = $validated['pricing_type'] ?? 'single';
+
+            // If item has sizes, price can be null
+            if ($validated['has_sizes']) {
+                $validated['price'] = null;
+            }
+
+            // If dual pricing, set price_solo and price_whole
+            if ($validated['pricing_type'] === 'dual') {
+                $validated['price'] = $validated['price_solo']; // For backward compatibility
+            }
 
             $item = Item::create($validated);
             
@@ -154,6 +187,9 @@ class FoodItemController extends Controller
                     'name' => $item->name,
                     'description' => $item->description,
                     'price' => (float)$item->price,
+                    'price_solo' => (float)$item->price_solo,
+                    'price_whole' => (float)$item->price_whole,
+                    'pricing_type' => $item->pricing_type,
                     'category_id' => $item->category_id,
                     'category_name' => $item->category->name ?? '',
                     'is_available' => (bool)$item->is_available,
@@ -162,6 +198,8 @@ class FoodItemController extends Controller
                     'low_stock_threshold' => (int)$item->low_stock_threshold,
                     'sort_order' => (int)$item->sort_order,
                     'image' => $item->image,
+                    'has_sizes' => (bool)$item->has_sizes,
+                    'sizes' => [],
                 ],
                 'stats' => $stats,
             ]);
@@ -188,7 +226,7 @@ class FoodItemController extends Controller
             $validated = $request->validate([
                 'name' => 'required|string|max:255|unique:items,name,' . $item->id,
                 'description' => 'nullable|string',
-                'price' => 'required|numeric|min:0',
+                'price' => 'nullable|numeric|min:0',
                 'category_id' => 'required|exists:categories,id',
                 'ingredients' => 'nullable|string',
                 'preparation_time' => 'nullable|integer|min:0',
@@ -198,6 +236,10 @@ class FoodItemController extends Controller
                 'is_available' => 'nullable|boolean',
                 'sort_order' => 'nullable|integer',
                 'image' => 'nullable|image|max:2048',
+                'has_sizes' => 'nullable|boolean',
+                'pricing_type' => 'nullable|in:single,dual',
+                'price_solo' => 'nullable|numeric|min:0',
+                'price_whole' => 'nullable|numeric|min:0',
             ]);
 
             // Handle image upload
@@ -215,6 +257,19 @@ class FoodItemController extends Controller
                     Storage::disk('public')->delete($item->image);
                 }
                 $validated['image'] = null;
+            }
+
+            $validated['has_sizes'] = isset($validated['has_sizes']) ? (bool)$validated['has_sizes'] : $item->has_sizes;
+            $validated['pricing_type'] = $validated['pricing_type'] ?? $item->pricing_type;
+
+            // If item has sizes, price can be null
+            if ($validated['has_sizes']) {
+                $validated['price'] = null;
+            }
+
+            // If dual pricing, set price_solo and price_whole
+            if ($validated['pricing_type'] === 'dual') {
+                $validated['price'] = $validated['price_solo'] ?? $item->price_solo; // For backward compatibility
             }
 
             $item->update($validated);
@@ -235,6 +290,9 @@ class FoodItemController extends Controller
                     'name' => $item->name,
                     'description' => $item->description,
                     'price' => (float)$item->price,
+                    'price_solo' => (float)$item->price_solo,
+                    'price_whole' => (float)$item->price_whole,
+                    'pricing_type' => $item->pricing_type,
                     'category_id' => $item->category_id,
                     'category_name' => $item->category->name ?? '',
                     'is_available' => (bool)$item->is_available,
@@ -243,6 +301,7 @@ class FoodItemController extends Controller
                     'low_stock_threshold' => (int)$item->low_stock_threshold,
                     'sort_order' => (int)$item->sort_order,
                     'image' => $item->image,
+                    'has_sizes' => (bool)$item->has_sizes,
                 ],
             ]);
 
@@ -460,23 +519,40 @@ class FoodItemController extends Controller
      */
     public function getForPos(Request $request)
     {
-        $items = Item::with('category')
+        $items = Item::with(['category', 'itemSizes.size'])
             ->where('is_available', true)
             ->orderBy('sort_order', 'asc')
             ->orderBy('name', 'asc')
             ->get()
             ->map(function($item) {
+                // Format sizes
+                $sizes = $item->itemSizes->map(function($itemSize) {
+                    return [
+                        'id' => $itemSize->id,
+                        'size_id' => $itemSize->size_id,
+                        'size_name' => $itemSize->size->name,
+                        'display_name' => $itemSize->size->display_name,
+                        'price' => (float) $itemSize->price,
+                    ];
+                });
+
                 return [
                     'id' => $item->id,
                     'name' => $item->name,
                     'description' => $item->description,
                     'price' => (float)$item->price,
+                    'price_solo' => (float)$item->price_solo,
+                    'price_whole' => (float)$item->price_whole,
+                    'pricing_type' => $item->pricing_type,
                     'category_id' => $item->category_id,
                     'category_name' => $item->category->name ?? '',
                     'is_available' => (bool)$item->is_available,
                     'stock_quantity' => (int)$item->stock_quantity,
                     'low_stock_threshold' => (int)$item->low_stock_threshold,
                     'image' => $item->image,
+                    'has_sizes' => $sizes->count() > 0,
+                    'sizes' => $sizes,
+                    'display_price' => $item->display_price,
                 ];
             });
 
@@ -484,6 +560,53 @@ class FoodItemController extends Controller
             'success' => true,
             'items' => $items,
             'timestamp' => now()->toDateTimeString(),
+        ]);
+    }
+
+    /**
+     * Get items with sizes for Foods.jsx (batch loading)
+     */
+    public function getItemsWithSizes()
+    {
+        $items = Item::with(['category', 'itemSizes.size'])
+            ->orderBy('sort_order', 'asc')
+            ->orderBy('name', 'asc')
+            ->get()
+            ->map(function($item) {
+                $sizes = $item->itemSizes->map(function($itemSize) {
+                    return [
+                        'id' => $itemSize->id,
+                        'size_id' => $itemSize->size_id,
+                        'size_name' => $itemSize->size->name,
+                        'display_name' => $itemSize->size->display_name,
+                        'price' => (float) $itemSize->price,
+                    ];
+                });
+
+                return [
+                    'id' => $item->id,
+                    'name' => $item->name,
+                    'description' => $item->description,
+                    'price' => (float)$item->price,
+                    'price_solo' => (float)$item->price_solo,
+                    'price_whole' => (float)$item->price_whole,
+                    'pricing_type' => $item->pricing_type,
+                    'category_id' => $item->category_id,
+                    'category_name' => $item->category->name ?? '',
+                    'is_available' => (bool)$item->is_available,
+                    'is_featured' => (bool)$item->is_featured,
+                    'stock_quantity' => (int)$item->stock_quantity,
+                    'low_stock_threshold' => (int)$item->low_stock_threshold,
+                    'sort_order' => (int)$item->sort_order,
+                    'image' => $item->image,
+                    'has_sizes' => $sizes->count() > 0,
+                    'sizes' => $sizes,
+                ];
+            });
+
+        return response()->json([
+            'success' => true,
+            'items' => $items,
         ]);
     }
 

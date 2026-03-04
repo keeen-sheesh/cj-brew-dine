@@ -81,7 +81,7 @@ class DashboardController extends Controller
         $averageOrderValue = $completedOrders > 0 ? round($totalSales / $completedOrders, 2) : 0;
         
         // Low stock items
-        $lowStockItems = Item::whereColumn('stock_quantity', '<=', 'min_stock')
+        $lowStockItems = Item::whereColumn('stock_quantity', '<=', 'low_stock_threshold')
             ->where('stock_quantity', '>', 0)
             ->count();
         
@@ -111,12 +111,13 @@ class DashboardController extends Controller
         
         // Recent sales with pagination (10 per page)
         $perPage = $request->get('per_page', 10);
-        $recentSalesQuery = Sale::with(['customer', 'paymentMethod'])
+        $recentSalesQuery = Sale::with(['customer', 'paymentMethod', 'user'])
             ->orderBy('created_at', 'desc');
         
-        // Apply status filter if provided
-        if ($request->has('filter') && $request->filter !== 'all') {
-            $recentSalesQuery->where('status', $request->filter);
+        // Apply status filter if provided - DEFAULT TO 'all' NOT 'pending'
+        $statusFilter = $request->get('filter', 'all'); // ← CHANGED FROM 'pending' TO 'all'
+        if ($statusFilter !== 'all') {
+            $recentSalesQuery->where('status', $statusFilter);
         }
         
         $recentSales = $recentSalesQuery->paginate($perPage);
@@ -132,24 +133,41 @@ class DashboardController extends Controller
                 $customerName = $sale->customer->name;
             }
             
+            // Get cashier info
+            $cashierName = 'Unknown';
+            $cashierRole = 'resto';
+            if ($sale->user) {
+                $cashierName = $sale->user->name;
+                $cashierRole = $sale->user->role;
+            }
+            
+            // Check for hotel orders
             if ($sale->room_number || ($sale->paymentMethod && $sale->paymentMethod->name === 'Hotel')) {
                 $customerName = '[HOTEL] ' . $customerName;
             }
             
+            // Check for personal orders
+            if ($sale->customer_name && str_contains($sale->customer_name, '[PERSONAL]')) {
+                $customerName = $sale->customer_name;
+            }
+            
             return [
                 'id' => $sale->id,
-                'order_number' => $sale->order_number,
+                'order_number' => $sale->order_number ?? 'ORD-' . str_pad($sale->id, 6, '0', STR_PAD_LEFT),
                 'customer_name' => $customerName,
                 'room_number' => $sale->room_number,
+                'cashier_name' => $cashierName,
+                'cashier_role' => $cashierRole,
                 'total_amount' => (float) $sale->total_amount,
                 'status' => $sale->status,
-                'order_type' => $sale->order_type,
+                'order_type' => $sale->order_type ?? 'dine_in',
                 'payment_method' => $sale->paymentMethod ? $sale->paymentMethod->name : 'Unknown',
                 'items_count' => $itemsCount,
                 'created_at' => $sale->created_at->toISOString(),
                 'is_hotel' => !is_null($sale->room_number) || ($sale->paymentMethod && $sale->paymentMethod->name === 'Hotel'),
+                'is_personal' => $sale->customer_name && str_contains($sale->customer_name, '[PERSONAL]'),
             ];
-        });
+        })->values()->toArray();
         
         // Top selling items for selected date range
         $topItems = SaleItem::select(
@@ -179,7 +197,9 @@ class DashboardController extends Controller
                     'quantity' => (int) $item->quantity,
                     'revenue' => (float) $item->revenue,
                 ];
-            });
+            })
+            ->values()
+            ->toArray();
         
         // Top items this week (for comparison)
         $topItemsWeek = SaleItem::select(
@@ -195,7 +215,17 @@ class DashboardController extends Controller
             ->groupBy('sale_items.item_id', 'items.name')
             ->orderBy('revenue', 'desc')
             ->limit(5)
-            ->get();
+            ->get()
+            ->map(function ($item) {
+                return [
+                    'item_id' => $item->item_id,
+                    'item_name' => $item->item_name,
+                    'quantity' => (int) $item->quantity,
+                    'revenue' => (float) $item->revenue,
+                ];
+            })
+            ->values()
+            ->toArray();
         
         // Payment method breakdown for selected range
         $paymentMethodBreakdown = Sale::select(
@@ -207,7 +237,16 @@ class DashboardController extends Controller
             ->whereBetween('sales.created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
             ->where('sales.status', 'completed')
             ->groupBy('payment_methods.id', 'payment_methods.name')
-            ->get();
+            ->get()
+            ->map(function ($item) {
+                return [
+                    'method' => $item->method ?? 'Unknown',
+                    'order_count' => (int) $item->order_count,
+                    'total' => (float) $item->total,
+                ];
+            })
+            ->values()
+            ->toArray();
         
         // Order type breakdown
         $orderTypeBreakdown = Sale::select(
@@ -218,7 +257,16 @@ class DashboardController extends Controller
             ->whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
             ->where('status', 'completed')
             ->groupBy('order_type')
-            ->get();
+            ->get()
+            ->map(function ($item) {
+                return [
+                    'order_type' => $item->order_type ?? 'unknown',
+                    'count' => (int) $item->count,
+                    'total' => (float) $item->total,
+                ];
+            })
+            ->values()
+            ->toArray();
         
         return Inertia::render('Admin/Dashboard', [
             'stats' => [
@@ -249,7 +297,7 @@ class DashboardController extends Controller
                 'from' => $startDate,
                 'to' => $endDate,
                 'label' => $dateLabel,
-                'filter' => $request->get('filter', 'all'),
+                'filter' => $request->get('filter', 'all'), // ← CHANGED FROM 'pending' TO 'all'
             ],
         ]);
     }
@@ -272,15 +320,15 @@ class DashboardController extends Controller
                 'category' => $item->item->category ? $item->item->category->name : null,
                 'special_instructions' => $item->special_instructions,
             ];
-        });
+        })->values()->toArray();
         
         return response()->json([
             'id' => $sale->id,
-            'order_number' => $sale->order_number,
+            'order_number' => $sale->order_number ?? 'ORD-' . str_pad($sale->id, 6, '0', STR_PAD_LEFT),
             'customer_name' => $sale->customer_name ?? ($sale->customer ? $sale->customer->name : 'Walk-in Customer'),
             'customer_phone' => $sale->customer_phone,
             'room_number' => $sale->room_number,
-            'order_type' => $sale->order_type,
+            'order_type' => $sale->order_type ?? 'dine_in',
             'status' => $sale->status,
             'payment_method' => $sale->paymentMethod ? $sale->paymentMethod->name : 'Unknown',
             'people_count' => $sale->people_count,
@@ -301,7 +349,7 @@ class DashboardController extends Controller
      */
     public function transactions(Request $request)
     {
-        $query = Sale::with(['customer', 'paymentMethod'])
+        $query = Sale::with(['customer', 'paymentMethod', 'user'])
             ->orderBy('created_at', 'desc');
         
         if ($request->has('status') && $request->status !== 'all') {

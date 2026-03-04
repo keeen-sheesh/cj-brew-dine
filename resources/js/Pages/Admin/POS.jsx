@@ -61,7 +61,12 @@ import {
     BadgePercent,
     Briefcase,
     Building2,
-    MessageSquare
+    MessageSquare,
+    Settings,
+    User,
+    UserCircle,
+    Heart,
+    Gift
 } from 'lucide-react';
 
 // Category icons mapping
@@ -105,12 +110,13 @@ const ORDER_TYPES = [
     { value: 'delivery', label: 'Delivery', icon: Truck, color: 'bg-purple-500' },
 ];
 
-// Payment methods
+// Payment methods - ADDED Personal as ID 5
 const PAYMENT_METHODS = [
     { id: 1, name: 'Cash', icon: DollarSign, color: 'bg-green-500', textColor: 'text-green-600', bgColor: 'bg-green-50' },
     { id: 2, name: 'Card', icon: CreditCard, color: 'bg-blue-500', textColor: 'text-blue-600', bgColor: 'bg-blue-50' },
     { id: 3, name: 'E-Wallet', icon: Wallet, color: 'bg-purple-500', textColor: 'text-purple-600', bgColor: 'bg-purple-50' },
     { id: 4, name: 'Hotel', icon: Hotel, color: 'bg-amber-500', textColor: 'text-amber-600', bgColor: 'bg-amber-50' },
+    { id: 5, name: 'Personal', icon: Heart, color: 'bg-pink-500', textColor: 'text-pink-600', bgColor: 'bg-pink-50' },
 ];
 
 // Price formatting
@@ -119,6 +125,22 @@ const formatPrice = (price) => {
     const numPrice = Number(price);
     if (isNaN(numPrice)) return '0.00';
     return numPrice.toFixed(2);
+};
+
+// Get display price for item based on its type
+const getItemDisplayPrice = (item) => {
+    if (item.sizes && item.sizes.length > 0) {
+        const prices = item.sizes.map(s => s.price);
+        const minPrice = Math.min(...prices);
+        const maxPrice = Math.max(...prices);
+        
+        if (minPrice === maxPrice) {
+            return formatPrice(minPrice);
+        }
+        return `${formatPrice(minPrice)} - ${formatPrice(maxPrice)}`;
+    }
+    
+    return formatPrice(item.price);
 };
 
 // Philippine time formatting
@@ -180,6 +202,85 @@ const CATEGORY_GROUPS = {
     ]
 };
 
+// Size Selection Modal Component
+const SizeSelectionModal = ({ isOpen, onClose, item, onSelect }) => {
+    const [selectedSize, setSelectedSize] = useState(null);
+    
+    if (!isOpen || !item) return null;
+    
+    return (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+            <div className="bg-white rounded-xl shadow-2xl max-w-md w-full">
+                <div className="p-6 border-b border-gray-200">
+                    <div className="flex items-center justify-between">
+                        <h2 className="text-xl font-bold">Select Size</h2>
+                        <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded-lg">
+                            <X className="w-5 h-5" />
+                        </button>
+                    </div>
+                </div>
+                
+                <div className="p-6">
+                    <div className="mb-4">
+                        <h3 className="font-semibold text-gray-900">{item.name}</h3>
+                        {item.description && (
+                            <p className="text-sm text-gray-500 mt-1">{item.description}</p>
+                        )}
+                    </div>
+                    
+                    <div className="space-y-3">
+                        {item.sizes.map(size => (
+                            <button
+                                key={size.id}
+                                onClick={() => setSelectedSize(size)}
+                                className={`w-full p-4 rounded-lg border-2 transition-all flex items-center justify-between ${
+                                    selectedSize?.id === size.id
+                                        ? 'border-blue-500 bg-blue-50'
+                                        : 'border-gray-200 hover:border-gray-300'
+                                }`}
+                            >
+                                <div>
+                                    <span className="font-medium text-gray-900">
+                                        {size.display_name || size.size_name}
+                                    </span>
+                                </div>
+                                <span className="text-lg font-bold text-blue-600">
+                                    ₱{formatPrice(size.price)}
+                                </span>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+                
+                <div className="p-6 border-t border-gray-200 flex gap-3">
+                    <button
+                        onClick={onClose}
+                        className="flex-1 py-2 bg-gray-100 text-gray-700 rounded-lg font-medium hover:bg-gray-200"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        onClick={() => {
+                            if (selectedSize) {
+                                onSelect(selectedSize);
+                                onClose();
+                            }
+                        }}
+                        disabled={!selectedSize}
+                        className={`flex-1 py-2 rounded-lg font-medium ${
+                            selectedSize
+                                ? 'bg-blue-600 text-white hover:bg-blue-700'
+                                : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                        }`}
+                    >
+                        Add to Order
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 export default function POS({ 
     categories: initialCategories = [], 
     paymentMethods: initialPaymentMethods = [],
@@ -189,6 +290,10 @@ export default function POS({
     flash = {}
 }) {
     const { auth } = usePage().props;
+    
+    // Determine API base URL based on user role
+    const userRole = auth?.user?.role;
+    const apiBase = userRole === 'admin' ? '/admin' : '/cashier';
     
     // ============ STATE MANAGEMENT ============
     const [categories, setCategories] = useState(initialCategories);
@@ -200,6 +305,10 @@ export default function POS({
     
     // Hotel specific fields
     const [hotelInfo, setHotelInfo] = useState({ guestName: '', roomNumber: '' });
+    
+    // Employee and Personal fields
+    const [employeeInfo, setEmployeeInfo] = useState({ name: '', id: '' });
+    const [personalInfo, setPersonalInfo] = useState({ name: '', reason: '' });
     
     const [peopleCount, setPeopleCount] = useState(1);
     const [cardsPresented, setCardsPresented] = useState(0);
@@ -215,6 +324,10 @@ export default function POS({
     const [lastUpdate, setLastUpdate] = useState(new Date());
     const [showPendingOrders, setShowPendingOrders] = useState(true);
     const [selectedTable, setSelectedTable] = useState(null);
+    
+    // Size selection state
+    const [showSizeModal, setShowSizeModal] = useState(false);
+    const [selectedItemForSize, setSelectedItemForSize] = useState(null);
     
     // Item notes state
     const [itemNotes, setItemNotes] = useState({});
@@ -236,6 +349,7 @@ export default function POS({
     const [modalPeopleCount, setModalPeopleCount] = useState(1);
     const [modalCardsPresented, setModalCardsPresented] = useState(0);
     const [modalIsEmployee, setModalIsEmployee] = useState(false);
+    const [modalIsPersonal, setModalIsPersonal] = useState(false);
     
     // Refs
     const audioRef = useRef(null);
@@ -279,14 +393,14 @@ export default function POS({
         };
     }, []);
 
-    // ============ PROFESSIONAL AUTO-REFRESH WITH ADAPTIVE POLLING ============
+    // ============ AUTO-REFRESH WITH ADAPTIVE POLLING ============
     
     // Menu polling function
     const pollMenuUpdates = useCallback(async () => {
         if (!mountedRef.current || !isPollingActive) return;
         
         try {
-            const response = await fetch(`/cashier/pos/menu-updates?last_update=${lastMenuUpdate}`, {
+            const response = await fetch(`${apiBase}/pos/menu-updates?last_update=${lastMenuUpdate}`, {
                 headers: {
                     'Accept': 'application/json',
                     'X-Requested-With': 'XMLHttpRequest',
@@ -332,14 +446,14 @@ export default function POS({
                 menuPollTimeoutRef.current = setTimeout(pollMenuUpdates, backoffTime);
             }
         }
-    }, [lastMenuUpdate, isPollingActive, pollingStats.errors]);
+    }, [lastMenuUpdate, isPollingActive, pollingStats.errors, apiBase]);
 
     // Order polling function - checks for ready orders
     const pollOrderUpdates = useCallback(async () => {
         if (!mountedRef.current || !isPollingActive) return;
         
         try {
-            const response = await fetch(`/cashier/pos/order-updates?last_update=${lastOrderUpdate}`, {
+            const response = await fetch(`${apiBase}/pos/order-updates?last_update=${lastOrderUpdate}`, {
                 headers: {
                     'Accept': 'application/json',
                     'X-Requested-With': 'XMLHttpRequest',
@@ -367,7 +481,6 @@ export default function POS({
                         const previousOrders = pendingOrders;
                         const newReadyOrders = formattedOrders.filter(newOrder => {
                             const oldOrder = previousOrders.find(o => o.id === newOrder.id);
-                            // If order was not ready before but is now ready
                             return oldOrder && oldOrder.status !== 'ready' && newOrder.status === 'ready';
                         });
                         
@@ -415,7 +528,7 @@ export default function POS({
                 orderPollTimeoutRef.current = setTimeout(pollOrderUpdates, backoffTime);
             }
         }
-    }, [lastOrderUpdate, isPollingActive, pollingStats.errors, pendingOrders]);
+    }, [lastOrderUpdate, isPollingActive, pollingStats.errors, pendingOrders, apiBase]);
 
     // Start polling
     useEffect(() => {
@@ -441,7 +554,6 @@ export default function POS({
             if (category.id === categoryId) {
                 return category.name;
             }
-            // Check if items have category_name directly
             if (category.items) {
                 const item = category.items.find(i => i.id === categoryId);
                 if (item) return category.name;
@@ -455,7 +567,6 @@ export default function POS({
         let totalEmployeeDiscount = 0;
         
         items.forEach(item => {
-            // Find the category name for this item
             let categoryName = '';
             for (const category of categories) {
                 const found = category.items?.find(i => i.id === item.id);
@@ -467,34 +578,27 @@ export default function POS({
             
             const itemSubtotal = Number(item.price) * item.quantity;
             
-            // Apply discount based on category
             if (CATEGORY_GROUPS.COFFEE.includes(categoryName)) {
-                // Coffee, Milk Based, Frappe - 20% discount
                 totalEmployeeDiscount += itemSubtotal * 0.20;
             } else if (CATEGORY_GROUPS.SODA.includes(categoryName)) {
-                // Soda - 10% discount
                 totalEmployeeDiscount += itemSubtotal * 0.10;
             } else if (CATEGORY_GROUPS.FOOD.includes(categoryName)) {
-                // All food categories - 5% discount
                 totalEmployeeDiscount += itemSubtotal * 0.05;
             }
-            // Add-ons - no discount (0%)
         });
         
         return Math.round(totalEmployeeDiscount * 100) / 100;
     };
 
     // ============ CALCULATIONS ============
-    const calculateTotals = (people, cards, discType, discValue, isEmployeeActive, items, selectedPaymentMethod) => {
+    const calculateTotals = (people, cards, discType, discValue, isEmployeeActive, isPersonalActive, items, selectedPaymentMethod) => {
         const subtotal = items.reduce((sum, item) => sum + (Number(item.price) * item.quantity), 0);
         
-        // Step 1: Calculate employee discount if active
         let employeeDiscount = 0;
         if (isEmployeeActive) {
             employeeDiscount = calculateEmployeeDiscount(items);
         }
         
-        // Step 2: Calculate card discount (20% per card) - applies to subtotal after employee discount
         let afterEmployeeDiscount = subtotal - employeeDiscount;
         let cardDiscount = 0;
         if (cards > 0 && people > 0) {
@@ -502,7 +606,6 @@ export default function POS({
             cardDiscount = Math.round(cardDiscount * 100) / 100;
         }
         
-        // Step 3: Calculate additional manual discount - applies after employee and card discounts
         let afterCardDiscount = afterEmployeeDiscount - cardDiscount;
         let additionalDiscount = 0;
         if (discType === 'percentage' && discValue > 0) {
@@ -512,17 +615,16 @@ export default function POS({
         }
         additionalDiscount = Math.round(additionalDiscount * 100) / 100;
         
-        // Step 4: Calculate total after all discounts
         let afterAllDiscounts = afterCardDiscount - additionalDiscount;
         
-        // Step 5: Apply hotel service charge (10%) if payment method is Hotel - applies after all discounts
         let serviceCharge = 0;
         if (selectedPaymentMethod?.name === 'Hotel') {
             serviceCharge = afterAllDiscounts * 0.10;
             serviceCharge = Math.round(serviceCharge * 100) / 100;
         }
         
-        const finalTotal = afterAllDiscounts + serviceCharge;
+        // Personal orders still show total (for display) but will be marked as free in notes
+        let finalTotal = afterAllDiscounts + serviceCharge;
         
         return {
             subtotal,
@@ -531,16 +633,17 @@ export default function POS({
             additionalDiscount,
             serviceCharge,
             totalDiscount: employeeDiscount + cardDiscount + additionalDiscount,
-            total: finalTotal < 0 ? 0 : finalTotal
+            total: finalTotal < 0 ? 0 : finalTotal,
+            originalTotal: afterAllDiscounts + serviceCharge
         };
     };
 
-    const { subtotal, employeeDiscount, cardDiscount, additionalDiscount, serviceCharge, total } = calculateTotals(
-        peopleCount, cardsPresented, discount.type, discount.value, modalIsEmployee, orderItems, selectedPaymentMethod
+    const { subtotal, employeeDiscount, cardDiscount, additionalDiscount, serviceCharge, total, originalTotal } = calculateTotals(
+        peopleCount, cardsPresented, discount.type, discount.value, modalIsEmployee, modalIsPersonal, orderItems, selectedPaymentMethod
     );
 
     const modalTotals = calculateTotals(
-        modalPeopleCount, modalCardsPresented, discount.type, discount.value, modalIsEmployee, orderItems, selectedPaymentMethod
+        modalPeopleCount, modalCardsPresented, discount.type, discount.value, modalIsEmployee, modalIsPersonal, orderItems, selectedPaymentMethod
     );
 
     // ============ FILTERING ============
@@ -585,12 +688,10 @@ export default function POS({
         setTimeout(() => setNotification(null), 4000);
     };
 
-    // Dismiss a ready order notification
     const dismissReadyNotification = (notificationId) => {
         setReadyOrderNotifications(prev => prev.filter(n => n.id !== notificationId));
     };
 
-    // Dismiss all ready order notifications
     const dismissAllNotifications = () => {
         setReadyOrderNotifications([]);
     };
@@ -607,8 +708,24 @@ export default function POS({
             return;
         }
         
+        // Check if item has sizes
+        if (item.sizes && item.sizes.length > 0) {
+            setSelectedItemForSize(item);
+            setShowSizeModal(true);
+            return;
+        }
+        
+        // Regular item without sizes
+        addItemToCart(item, item.price, null);
+    };
+    
+    const addItemToCart = (item, price, selectedSize) => {
+        // Check stock
         if (item.stock_quantity !== null) {
-            const existingItem = orderItems.find(oi => oi.id === item.id);
+            const existingItem = orderItems.find(oi => 
+                oi.id === item.id && 
+                (selectedSize ? oi.size_id === selectedSize.size_id : !oi.size_id)
+            );
             const currentQuantity = existingItem ? existingItem.quantity : 0;
             
             if (currentQuantity + 1 > item.stock_quantity) {
@@ -617,26 +734,45 @@ export default function POS({
             }
         }
         
-        const existingItemIndex = orderItems.findIndex(oi => oi.id === item.id);
+        const existingItemIndex = orderItems.findIndex(oi => 
+            oi.id === item.id && 
+            (selectedSize ? oi.size_id === selectedSize.size_id : !oi.size_id)
+        );
         
         if (existingItemIndex >= 0) {
             const updatedItems = [...orderItems];
             updatedItems[existingItemIndex].quantity += 1;
             setOrderItems(updatedItems);
         } else {
-            setOrderItems([...orderItems, {
+            const newItem = {
                 id: item.id,
                 name: item.name,
-                price: Number(item.price),
+                price: Number(price),
                 quantity: 1,
                 stock: item.stock_quantity,
                 originalStock: item.stock_quantity,
                 image: item.image,
                 notes: ''
-            }]);
+            };
+            
+            // Add size information if selected
+            if (selectedSize) {
+                newItem.size_id = selectedSize.size_id;
+                newItem.size_name = selectedSize.display_name || selectedSize.size_name;
+            }
+            
+            setOrderItems([...orderItems, newItem]);
         }
         
-        showNotification(`${item.name} added`, 'success');
+        const displayName = selectedSize 
+            ? `${item.name} (${selectedSize.display_name || selectedSize.size_name})` 
+            : item.name;
+        showNotification(`${displayName} added`, 'success');
+    };
+
+    // Handle size selection
+    const handleSizeSelect = (size) => {
+        addItemToCart(selectedItemForSize, size.price, size);
     };
 
     // Open notes modal for item
@@ -667,7 +803,10 @@ export default function POS({
         if (newQuantity < 1) {
             updatedItems.splice(index, 1);
             setOrderItems(updatedItems);
-            showNotification(`${item.name} removed`, 'info');
+            const displayName = item.size_name 
+                ? `${item.name} (${item.size_name})` 
+                : item.name;
+            showNotification(`${displayName} removed`, 'info');
             return;
         }
         
@@ -681,10 +820,13 @@ export default function POS({
     };
 
     const removeItem = (index) => {
-        const itemName = orderItems[index].name;
+        const item = orderItems[index];
+        const displayName = item.size_name 
+            ? `${item.name} (${item.size_name})` 
+            : item.name;
         const updatedItems = orderItems.filter((_, i) => i !== index);
         setOrderItems(updatedItems);
-        showNotification(`${itemName} removed`, 'info');
+        showNotification(`${displayName} removed`, 'info');
     };
 
     const clearOrder = () => {
@@ -693,9 +835,12 @@ export default function POS({
             setOrderItems([]);
             setCustomerInfo({ name: '', phone: '', address: '', notes: '' });
             setHotelInfo({ guestName: '', roomNumber: '' });
+            setEmployeeInfo({ name: '', id: '' });
+            setPersonalInfo({ name: '', reason: '' });
             setPeopleCount(1);
             setCardsPresented(0);
             setModalIsEmployee(false);
+            setModalIsPersonal(false);
             setDiscount({ type: 'none', value: 0 });
             setItemNotes({});
             showNotification('Order cleared', 'info');
@@ -734,9 +879,12 @@ export default function POS({
         setModalPeopleCount(peopleCount);
         setModalCardsPresented(cardsPresented);
         setModalIsEmployee(false);
+        setModalIsPersonal(false);
         setSelectedPaymentMethod(null);
         setCashAmount('');
         setHotelInfo({ guestName: '', roomNumber: '' });
+        setEmployeeInfo({ name: '', id: '' });
+        setPersonalInfo({ name: '', reason: '' });
         setShowPaymentModal(true);
     };
 
@@ -746,17 +894,34 @@ export default function POS({
 
     // ============ ORDER SUBMISSION ============
     const handlePlaceOrder = () => {
-        if (!selectedPaymentMethod) {
+        // Validation for employee
+        if (modalIsEmployee && !employeeInfo.name) {
+            showNotification('Please enter employee name', 'error');
+            return;
+        }
+
+        // Validation for personal
+        if (modalIsPersonal && !personalInfo.name) {
+            showNotification('Please enter personal name', 'error');
+            return;
+        }
+
+        // For personal orders, auto-select Personal payment method
+        if (modalIsPersonal) {
+            setSelectedPaymentMethod({ id: 5, name: 'Personal' });
+        }
+
+        if (!selectedPaymentMethod && !modalIsPersonal) {
             showNotification('Select payment method', 'error');
             return;
         }
 
-        if (selectedPaymentMethod.name === 'Cash' && (!cashAmount || Number(cashAmount) < modalTotals.total)) {
+        if (selectedPaymentMethod?.name === 'Cash' && (!cashAmount || Number(cashAmount) < modalTotals.total)) {
             showNotification('Invalid cash amount', 'error');
             return;
         }
 
-        if (selectedPaymentMethod.name === 'Hotel' && (!hotelInfo.guestName || !hotelInfo.roomNumber)) {
+        if (selectedPaymentMethod?.name === 'Hotel' && (!hotelInfo.guestName || !hotelInfo.roomNumber)) {
             showNotification('Enter guest name and room number', 'error');
             return;
         }
@@ -783,10 +948,23 @@ export default function POS({
 
         let finalCustomerName = customerInfo.name;
         let roomNumber = null;
+        let orderNotes = customerInfo.notes || '';
         
-        if (selectedPaymentMethod.name === 'Hotel') {
+        if (selectedPaymentMethod?.name === 'Hotel') {
             finalCustomerName = `[HOTEL] ${hotelInfo.guestName}`;
             roomNumber = hotelInfo.roomNumber;
+        } else if (modalIsEmployee) {
+            finalCustomerName = `[EMPLOYEE] ${employeeInfo.name}`;
+            if (employeeInfo.id) {
+                orderNotes += ` Employee ID: ${employeeInfo.id}`;
+            }
+        } else if (modalIsPersonal) {
+            finalCustomerName = `[PERSONAL] ${personalInfo.name}`;
+            if (personalInfo.reason) {
+                orderNotes += ` Reason: ${personalInfo.reason}`;
+            }
+            // Add free note
+            orderNotes += ` [FREE ORDER - Personal]`;
         } else if (orderType === 'delivery' && customerInfo.name) {
             finalCustomerName = customerInfo.name;
         }
@@ -797,56 +975,73 @@ export default function POS({
             modalCardsPresented, 
             discount.type, 
             discount.value, 
-            modalIsEmployee, 
+            modalIsEmployee,
+            modalIsPersonal,
             orderItems, 
             selectedPaymentMethod
         );
 
-        const orderData = {
-            items: orderItems.map(item => ({
+        // Format items with size information
+        const formattedItems = orderItems.map(item => {
+            const itemData = {
                 id: item.id,
                 name: item.name,
                 price: Number(item.price),
                 quantity: item.quantity,
                 notes: item.notes || null
-            })),
+            };
+            
+            // Add size information if present
+            if (item.size_id) {
+                itemData.size_id = item.size_id;
+            }
+            
+            return itemData;
+        });
+
+        // For personal orders, use payment method ID 5 (Personal) and keep original total
+        // The backend will handle marking it as free/complimentary
+        const paymentMethodId = modalIsPersonal ? 5 : selectedPaymentMethod?.id;
+        const totalAmount = finalTotals.total; // Keep original total for personal orders
+
+        const orderData = {
+            items: formattedItems,
             order_type: orderType,
             customer_name: finalCustomerName || null,
             room_number: roomNumber,
             customer_phone: customerInfo.phone || null,
             customer_address: customerInfo.address || null,
-            notes: customerInfo.notes || null,
+            notes: orderNotes || null,
             people_count: modalPeopleCount,
             cards_presented: modalCardsPresented,
             discount_type: discount.type,
             discount_value: discount.value,
             is_employee: modalIsEmployee ? 1 : 0,
+            is_personal: modalIsPersonal ? 1 : 0,
             employee_discount_amount: finalTotals.employeeDiscount,
             service_charge: finalTotals.serviceCharge,
-            payment_method_id: selectedPaymentMethod.id,
+            payment_method_id: paymentMethodId,
             subtotal: finalTotals.subtotal,
-            total_amount: finalTotals.total
+            total_amount: totalAmount,
+            original_total: finalTotals.originalTotal
         };
 
-        // FORCE ROOM NUMBER TO BE INCLUDED
-        console.log('SENDING ROOM NUMBER:', roomNumber);
-        console.log('ORDER DATA:', orderData);
-
-        router.post('/cashier/pos/orders', orderData, {
+        router.post(`${apiBase}/pos/orders`, orderData, {
             onSuccess: (response) => {
-                // Format order number for display
                 const orderId = response.props.flash?.order_data?.order_id || Date.now();
                 const formattedOrderNumber = `ORD-${String(orderId).padStart(5, '0')}`;
                 
                 const successData = {
                     orderId: formattedOrderNumber,
-                    total: finalTotals.total,
+                    total: totalAmount,
+                    originalTotal: finalTotals.originalTotal,
                     itemsCount: orderItems.length,
                     customerName: finalCustomerName || 'Walk-in',
                     orderType: orderType,
-                    paymentMethod: selectedPaymentMethod.name,
+                    paymentMethod: modalIsPersonal ? 'Personal (Free)' : (selectedPaymentMethod?.name || 'Cash'),
                     hasEmployeeDiscount: modalIsEmployee,
-                    hasServiceCharge: selectedPaymentMethod.name === 'Hotel',
+                    hasServiceCharge: selectedPaymentMethod?.name === 'Hotel',
+                    isPersonal: modalIsPersonal,
                     roomNumber: roomNumber
                 };
                 
@@ -854,9 +1049,12 @@ export default function POS({
                 setOrderItems([]);
                 setCustomerInfo({ name: '', phone: '', address: '', notes: '' });
                 setHotelInfo({ guestName: '', roomNumber: '' });
+                setEmployeeInfo({ name: '', id: '' });
+                setPersonalInfo({ name: '', reason: '' });
                 setPeopleCount(1);
                 setCardsPresented(0);
                 setModalIsEmployee(false);
+                setModalIsPersonal(false);
                 setDiscount({ type: 'none', value: 0 });
                 setItemNotes({});
                 setIsLoading(false);
@@ -879,7 +1077,7 @@ export default function POS({
         
         setProcessingOrder(orderId);
         
-        fetch(`/admin/orders/${orderId}/complete`, {
+        fetch(`${apiBase}/orders/${orderId}/complete`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -892,7 +1090,6 @@ export default function POS({
             if (data.success) {
                 showNotification(data.message || `Order #${orderId} completed`, 'success');
                 setPendingOrders(prev => prev.filter(order => order.id !== orderId));
-                // Remove from notifications if it was there
                 setReadyOrderNotifications(prev => prev.filter(n => n.id !== orderId));
                 setLastOrderUpdate(Date.now());
             } else {
@@ -912,10 +1109,10 @@ export default function POS({
         setIsLoading(true);
         try {
             const [menuRes, orderRes] = await Promise.all([
-                fetch('/cashier/pos/menu-data', {
+                fetch(`${apiBase}/pos/menu-data`, {
                     headers: { 'Cache-Control': 'no-cache' }
                 }),
-                fetch('/cashier/pos/order-data', {
+                fetch(`${apiBase}/pos/order-data`, {
                     headers: { 'Cache-Control': 'no-cache' }
                 })
             ]);
@@ -925,7 +1122,6 @@ export default function POS({
             
             if (menuData.success) setCategories(menuData.categories);
             if (orderData.success) {
-                // Format order numbers
                 const formattedOrders = orderData.pending_orders.map(order => ({
                     ...order,
                     display_order_number: `ORD-${String(order.id).padStart(5, '0')}`
@@ -1054,14 +1250,20 @@ export default function POS({
         if (!successOrder) return null;
         return (
             <div className="fixed top-4 right-4 z-50 animate-slide-in max-w-sm">
-                <div className="bg-gradient-to-r from-emerald-500 to-green-500 text-white rounded-xl shadow-xl p-4">
+                <div className={`bg-gradient-to-r rounded-xl shadow-xl p-4 ${
+                    successOrder.isPersonal 
+                        ? 'from-pink-500 to-rose-500' 
+                        : 'from-emerald-500 to-green-500'
+                } text-white`}>
                     <div className="flex items-start gap-3">
                         <div className="p-2 bg-white/20 rounded-lg flex-shrink-0">
-                            <CheckCircle className="w-6 h-6" />
+                            {successOrder.isPersonal ? <Heart className="w-6 h-6" /> : <CheckCircle className="w-6 h-6" />}
                         </div>
                         <div className="flex-1 min-w-0">
                             <div className="flex justify-between items-start mb-2">
-                                <h3 className="font-bold text-lg truncate">Order Placed!</h3>
+                                <h3 className="font-bold text-lg truncate">
+                                    {successOrder.isPersonal ? 'Personal Order!' : 'Order Placed!'}
+                                </h3>
                                 <button onClick={() => setSuccessOrder(null)} className="text-white/80 hover:text-white ml-2 flex-shrink-0">
                                     <X className="w-4 h-4" />
                                 </button>
@@ -1075,6 +1277,12 @@ export default function POS({
                                     <span>Payment:</span>
                                     <span>{successOrder.paymentMethod}</span>
                                 </div>
+                                {successOrder.isPersonal && (
+                                    <div className="flex justify-between text-yellow-200">
+                                        <span>Total:</span>
+                                        <span>₱{formatPrice(successOrder.total)} (Free)</span>
+                                    </div>
+                                )}
                                 {successOrder.hasEmployeeDiscount && (
                                     <div className="flex justify-between text-yellow-200">
                                         <span>Employee Discount</span>
@@ -1111,12 +1319,12 @@ export default function POS({
             return { text: 'Completed', color: 'bg-green-100 text-green-800', icon: CheckCircle };
         }
         if (order.status === 'ready') {
-            return { text: 'Ready', color: 'bg-emerald-100 text-emerald-800', icon: Check };
+            return { text: 'Ready to Pickup', color: 'bg-emerald-100 text-emerald-800', icon: Check };
         }
         if (order.status === 'preparing') {
             return { text: 'Preparing', color: 'bg-blue-100 text-blue-800', icon: Flame };
         }
-        if (order.has_kitchen_items === true) {
+        if (order.kitchen_status === 'pending') {
             return { text: 'In Kitchen', color: 'bg-amber-100 text-amber-800', icon: ChefHat };
         }
         return { text: 'Pending', color: 'bg-yellow-100 text-yellow-800', icon: Hourglass };
@@ -1124,31 +1332,48 @@ export default function POS({
 
     // Check if order can be completed
     const canCompleteOrder = (order) => {
-        if (order.has_kitchen_items === false) return true;
-        return order.status === 'ready';
+        // Order can be completed if:
+        // 1. It has no kitchen items (non-kitchen order like soda)
+        // 2. OR it has kitchen items and status is 'ready'
+        return !order.has_kitchen_items || order.status === 'ready';
     };
 
     // Get button text for order
     const getOrderButton = (order) => {
-        if (order.has_kitchen_items === false) {
-            return { text: 'Complete', color: 'bg-green-500 hover:bg-green-600', icon: CheckCircle };
+        // If order has no kitchen items (like soda), show Complete button immediately
+        if (!order.has_kitchen_items) {
+            return { text: 'Complete', color: 'bg-green-500 hover:bg-green-600', icon: CheckCircle, disabled: false };
         }
         
-        switch(order.status) {
-            case 'pending':
-                return { text: 'In Kitchen', color: 'bg-amber-500 cursor-not-allowed', icon: ChefHat, disabled: true };
-            case 'preparing':
-                return { text: 'Preparing', color: 'bg-blue-500 cursor-not-allowed', icon: Flame, disabled: true };
-            case 'ready':
-                return { text: 'Complete', color: 'bg-green-500 hover:bg-green-600', icon: CheckCircle };
-            default:
-                return { text: 'Complete', color: 'bg-green-500 hover:bg-green-600', icon: CheckCircle };
+        // For orders with kitchen items, only show Complete when kitchen marks as ready
+        if (order.status === 'ready') {
+            return { text: 'Complete', color: 'bg-green-500 hover:bg-green-600', icon: CheckCircle, disabled: false };
         }
+        
+        // For orders with kitchen items that are not ready
+        if (order.status === 'pending') {
+            if (order.kitchen_status === 'pending') {
+                return { text: 'In Kitchen', color: 'bg-amber-500 cursor-not-allowed', icon: ChefHat, disabled: true };
+            }
+            return { text: 'Pending', color: 'bg-amber-500 cursor-not-allowed', icon: Hourglass, disabled: true };
+        }
+        
+        if (order.status === 'preparing') {
+            return { text: 'Preparing', color: 'bg-blue-500 cursor-not-allowed', icon: Flame, disabled: true };
+        }
+        
+        // Default fallback
+        return { text: 'Complete', color: 'bg-green-500 hover:bg-green-600', icon: CheckCircle, disabled: false };
     };
 
-    // Check if order is hotel order by looking at customer name or payment method
+    // Check if order is hotel order
     const isHotelOrder = (order) => {
         return order.customer_name?.includes('[HOTEL]') || order.payment_method_name === 'Hotel';
+    };
+
+    // Check if order is personal order
+    const isPersonalOrder = (order) => {
+        return order.customer_name?.includes('[PERSONAL]');
     };
 
     // Filter pending orders
@@ -1159,6 +1384,17 @@ export default function POS({
     return (
         <>
             <Head title="POS System" />
+
+            {/* Size Selection Modal */}
+            <SizeSelectionModal
+                isOpen={showSizeModal}
+                onClose={() => {
+                    setShowSizeModal(false);
+                    setSelectedItemForSize(null);
+                }}
+                item={selectedItemForSize}
+                onSelect={handleSizeSelect}
+            />
 
             {/* Ready Order Notifications */}
             <ReadyOrderNotifications />
@@ -1253,7 +1489,12 @@ export default function POS({
                                     {orderItems.map((item, index) => (
                                         <div key={index} className="border-b border-gray-100 pb-3">
                                             <div className="flex justify-between items-start mb-2">
-                                                <h4 className="font-medium text-gray-900">{item.name}</h4>
+                                                <div>
+                                                    <h4 className="font-medium text-gray-900">{item.name}</h4>
+                                                    {item.size_name && (
+                                                        <p className="text-xs text-blue-600 mt-0.5">{item.size_name}</p>
+                                                    )}
+                                                </div>
                                                 <div className="flex gap-1">
                                                     <button
                                                         onClick={() => openNotesModal(index)}
@@ -1371,6 +1612,12 @@ export default function POS({
                                     <span>Total</span>
                                     <span className="text-lg text-blue-600">₱{formatPrice(total)}</span>
                                 </div>
+                                {modalIsPersonal && (
+                                    <div className="flex justify-between text-sm text-pink-600 bg-pink-50 p-2 rounded mt-2">
+                                        <span className="font-medium">Personal Order</span>
+                                        <span>Will be marked as free</span>
+                                    </div>
+                                )}
                             </div>
 
                             {/* Action Buttons */}
@@ -1462,6 +1709,10 @@ export default function POS({
                                         const lowStock = item.stock_quantity !== null && item.stock_quantity <= 5 && item.stock_quantity > 0;
                                         const outOfStock = item.stock_quantity !== null && item.stock_quantity <= 0;
                                         const imageUrl = getImageUrl(item.image);
+                                        const hasSizes = item.sizes && item.sizes.length > 0;
+                                        
+                                        // Get display price for item
+                                        const displayPrice = getItemDisplayPrice(item);
                                         
                                         return (
                                             <button
@@ -1479,7 +1730,7 @@ export default function POS({
                                                             className="w-full h-full object-cover"
                                                             onError={(e) => {
                                                                 e.target.style.display = 'none';
-                                                                e.target.parentElement.innerHTML = '<div class="w-full h-full flex items-center justify-center bg-gray-100"><svg class="w-8 h-8 text-gray-400" ...></svg></div>';
+                                                                e.target.parentElement.innerHTML = '<div class="w-full h-full flex items-center justify-center bg-gray-100"><Utensils class="w-8 h-8 text-gray-400" /></div>';
                                                             }}
                                                         />
                                                     ) : (
@@ -1497,11 +1748,17 @@ export default function POS({
                                                             Low Stock
                                                         </span>
                                                     )}
+                                                    {hasSizes && (
+                                                        <span className="absolute bottom-1 left-1 px-1.5 py-0.5 bg-purple-500 text-white text-xs rounded flex items-center gap-1">
+                                                            <Settings className="w-3 h-3" />
+                                                            Sizes
+                                                        </span>
+                                                    )}
                                                 </div>
                                                 <div className="p-2">
                                                     <h3 className="font-medium text-gray-900 text-sm truncate">{item.name}</h3>
                                                     <div className="flex justify-between items-center mt-1">
-                                                        <p className="text-lg font-bold text-blue-600">₱{formatPrice(item.price)}</p>
+                                                        <p className="text-lg font-bold text-blue-600">₱{displayPrice}</p>
                                                         {item.stock_quantity !== null && (
                                                             <p className="text-xs text-gray-500">Stock: {item.stock_quantity}</p>
                                                         )}
@@ -1517,8 +1774,8 @@ export default function POS({
 
                     {/* Right Column - Pending Orders */}
                     {showPendingOrders && (
-                        <div className="w-[25%] bg-white border-l border-gray-200 flex flex-col">
-                            <div className="p-4 border-b border-gray-200 flex justify-between items-center">
+                        <div className="w-[25%] bg-white border-l border-gray-200 flex flex-col overflow-hidden">
+                            <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-white sticky top-0 z-10">
                                 <h2 className="font-bold text-gray-900">Pending Orders</h2>
                                 <span className="px-2 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-medium">
                                     {filteredPendingOrders.length}
@@ -1539,20 +1796,29 @@ export default function POS({
                                             const button = getOrderButton(order);
                                             const ButtonIcon = button.icon;
                                             const isHotel = isHotelOrder(order);
+                                            const isPersonal = isPersonalOrder(order);
                                             
                                             return (
                                                 <div key={order.id} className={`rounded-lg p-3 border ${
-                                                    isHotel 
+                                                    isPersonal 
+                                                        ? 'bg-pink-50 border-pink-300' 
+                                                        : isHotel 
                                                         ? 'bg-amber-50 border-amber-300' 
                                                         : 'bg-amber-50 border-amber-200'
                                                 }`}>
                                                     <div className="flex justify-between items-start mb-2">
                                                         <div>
-                                                            <div className="flex items-center gap-2">
+                                                            <div className="flex items-center gap-2 flex-wrap">
                                                                 <span className="font-bold text-gray-900">
                                                                     {order.display_order_number || `ORD-${String(order.id).padStart(5, '0')}`}
                                                                 </span>
-                                                                {isHotel && (
+                                                                {isPersonal && (
+                                                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-pink-200 text-pink-800 rounded-full text-xs font-medium">
+                                                                        <Heart className="w-3 h-3" />
+                                                                        Personal
+                                                                    </span>
+                                                                )}
+                                                                {isHotel && !isPersonal && (
                                                                     <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-200 text-amber-800 rounded-full text-xs font-medium">
                                                                         <Building2 className="w-3 h-3" />
                                                                         Hotel
@@ -1562,7 +1828,6 @@ export default function POS({
                                                             {order.customer_name && (
                                                                 <p className="text-xs text-gray-600 mt-1">{order.customer_name}</p>
                                                             )}
-                                                            {/* Show room number if hotel order */}
                                                             {isHotel && order.room_number && (
                                                                 <div className="flex items-center gap-1 text-xs text-amber-600 mt-1">
                                                                     <Hash className="w-3 h-3" />
@@ -1573,7 +1838,6 @@ export default function POS({
                                                         <span className="font-bold text-amber-600">₱{formatPrice(order.total_amount)}</span>
                                                     </div>
                                                     
-                                                    {/* Status Badge */}
                                                     <div className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${statusBadge.color} mb-2`}>
                                                         <StatusIcon className="w-3 h-3" />
                                                         <span>{statusBadge.text}</span>
@@ -1587,7 +1851,7 @@ export default function POS({
                                                         <span>{formatPhilippineTime(order.created_at)}</span>
                                                     </div>
                                                     
-                                                    {canCompleteOrder(order) ? (
+                                                    {!button.disabled ? (
                                                         <button
                                                             onClick={() => completeOrder(order.id)}
                                                             disabled={processingOrder === order.id}
@@ -1602,7 +1866,7 @@ export default function POS({
                                                     ) : (
                                                         <button
                                                             disabled
-                                                            className="w-full py-1.5 bg-gray-400 text-white rounded text-sm cursor-not-allowed flex items-center justify-center gap-1">
+                                                            className={`w-full py-1.5 ${button.color} text-white rounded text-sm cursor-not-allowed flex items-center justify-center gap-1 opacity-70`}>
                                                             <ButtonIcon className="w-3 h-3" />
                                                             {button.text}
                                                         </button>
@@ -1674,9 +1938,9 @@ export default function POS({
                                 </div>
                             </div>
 
-                            {/* Employee Toggle */}
+                            {/* Employee Toggle with Name Input */}
                             <div className="mb-6">
-                                <div className="flex items-center justify-between p-4 bg-purple-50 rounded-lg border-2 border-purple-200">
+                                <div className="flex items-center justify-between p-4 bg-purple-50 rounded-lg border-2 border-purple-200 mb-3">
                                     <div className="flex items-center gap-3">
                                         <div className="p-2 bg-purple-100 rounded-full">
                                             <Briefcase className="w-5 h-5 text-purple-600" />
@@ -1691,7 +1955,12 @@ export default function POS({
                                             type="checkbox"
                                             className="sr-only peer"
                                             checked={modalIsEmployee}
-                                            onChange={() => setModalIsEmployee(!modalIsEmployee)}
+                                            onChange={(e) => {
+                                                setModalIsEmployee(e.target.checked);
+                                                if (e.target.checked) {
+                                                    setModalIsPersonal(false);
+                                                }
+                                            }}
                                         />
                                         <div className={`w-14 h-7 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[4px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all ${
                                             modalIsEmployee ? 'bg-purple-600' : 'bg-gray-300'
@@ -1703,56 +1972,138 @@ export default function POS({
                                 </div>
                                 
                                 {modalIsEmployee && (
-                                    <div className="mt-3 p-3 bg-purple-50 rounded-lg border border-purple-200">
-                                        <p className="text-xs font-medium text-purple-800 mb-2">💼 Employee discounts applied:</p>
-                                        <ul className="text-xs text-purple-700 space-y-1">
-                                            <li className="flex justify-between">
-                                                <span>• Coffee / Milk / Frappe:</span>
-                                                <span className="font-bold">20% off</span>
-                                            </li>
-                                            <li className="flex justify-between">
-                                                <span>• All Food items:</span>
-                                                <span className="font-bold">5% off</span>
-                                            </li>
-                                            <li className="flex justify-between">
-                                                <span>• Soda:</span>
-                                                <span className="font-bold">10% off</span>
-                                            </li>
-                                            <li className="flex justify-between text-purple-500">
-                                                <span>• Add-ons:</span>
-                                                <span className="font-bold">No discount</span>
-                                            </li>
-                                        </ul>
+                                    <>
+                                        <div className="space-y-3 mt-3">
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                    Employee Name <span className="text-red-500">*</span>
+                                                </label>
+                                                <div className="relative">
+                                                    <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                                                    <input
+                                                        type="text"
+                                                        value={employeeInfo.name}
+                                                        onChange={(e) => setEmployeeInfo({...employeeInfo, name: e.target.value})}
+                                                        placeholder="Enter employee name"
+                                                        className="w-full pl-9 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500"
+                                                    />
+                                                </div>
+                                            </div>
+                                           
+                                        </div>
+                                        
+                                        <div className="mt-3 p-3 bg-purple-50 rounded-lg border border-purple-200">
+                                            <p className="text-xs font-medium text-purple-800 mb-2">💼 Employee discounts applied:</p>
+                                            <ul className="text-xs text-purple-700 space-y-1">
+                                                <li className="flex justify-between">
+                                                    <span>• Coffee / Milk / Frappe:</span>
+                                                    <span className="font-bold">20% off</span>
+                                                </li>
+                                                <li className="flex justify-between">
+                                                    <span>• All Food items:</span>
+                                                    <span className="font-bold">5% off</span>
+                                                </li>
+                                                <li className="flex justify-between">
+                                                    <span>• Soda:</span>
+                                                    <span className="font-bold">10% off</span>
+                                                </li>
+                                                <li className="flex justify-between text-purple-500">
+                                                    <span>• Add-ons:</span>
+                                                    <span className="font-bold">No discount</span>
+                                                </li>
+                                            </ul>
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+
+                            {/* Personal Toggle with Name Input */}
+                            <div className="mb-6">
+                                <div className="flex items-center justify-between p-4 bg-pink-50 rounded-lg border-2 border-pink-200 mb-3">
+                                    <div className="flex items-center gap-3">
+                                        <div className="p-2 bg-pink-100 rounded-full">
+                                            <Heart className="w-5 h-5 text-pink-600" />
+                                        </div>
+                                        <div>
+                                            <h3 className="font-semibold text-gray-900">Personal Order (Free)</h3>
+                                            <p className="text-xs text-gray-600">For owner, family, or complimentary</p>
+                                        </div>
+                                    </div>
+                                    <label className="relative inline-flex items-center cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            className="sr-only peer"
+                                            checked={modalIsPersonal}
+                                            onChange={(e) => {
+                                                setModalIsPersonal(e.target.checked);
+                                                if (e.target.checked) {
+                                                    setModalIsEmployee(false);
+                                                    // Auto-select Personal payment method
+                                                    setSelectedPaymentMethod({ id: 5, name: 'Personal' });
+                                                }
+                                            }}
+                                        />
+                                        <div className={`w-14 h-7 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[4px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all ${
+                                            modalIsPersonal ? 'bg-pink-600' : 'bg-gray-300'
+                                        }`}></div>
+                                        <span className="ml-3 text-sm font-medium text-gray-900">
+                                            {modalIsPersonal ? 'Yes' : 'No'}
+                                        </span>
+                                    </label>
+                                </div>
+                                
+                                {modalIsPersonal && (
+                                    <div className="space-y-3 mt-3">
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                Personal Name <span className="text-red-500">*</span>
+                                            </label>
+                                            <div className="relative">
+                                                <UserCircle className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                                                <input
+                                                    type="text"
+                                                    value={personalInfo.name}
+                                                    onChange={(e) => setPersonalInfo({...personalInfo, name: e.target.value})}
+                                                    placeholder="Enter name (owner, family, etc.)"
+                                                    className="w-full pl-9 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-pink-500"
+                                                />
+                                            </div>
+                                        </div>
+                                        
                                     </div>
                                 )}
                             </div>
 
-                            {/* Payment Methods */}
-                            <h3 className="font-semibold text-gray-700 mb-3">Payment Method</h3>
-                            <div className="grid grid-cols-2 gap-3 mb-6">
-                                {PAYMENT_METHODS.map(method => {
-                                    const Icon = method.icon;
-                                    const isSelected = selectedPaymentMethod?.id === method.id;
-                                    return (
-                                        <button
-                                            key={method.id}
-                                            onClick={() => setSelectedPaymentMethod(method)}
-                                            className={`p-4 rounded-lg border-2 transition-all ${
-                                                isSelected
-                                                    ? `${method.bgColor} border-${method.color.split('-')[1]}-500`
-                                                    : 'border-gray-200 hover:border-gray-300'
-                                            }`}>
-                                            <Icon className={`w-8 h-8 mx-auto mb-2 ${isSelected ? method.textColor : 'text-gray-600'}`} />
-                                            <span className={`text-sm font-medium ${isSelected ? method.textColor : 'text-gray-600'}`}>
-                                                {method.name}
-                                            </span>
-                                            {method.name === 'Hotel' && isSelected && (
-                                                <span className="text-xs text-amber-600 block mt-1">+10% Service Charge</span>
-                                            )}
-                                        </button>
-                                    );
-                                })}
-                            </div>
+                            {/* Payment Methods - Hide for Personal orders since it's auto-selected */}
+                            {!modalIsPersonal && (
+                                <>
+                                    <h3 className="font-semibold text-gray-700 mb-3">Payment Method</h3>
+                                    <div className="grid grid-cols-2 gap-3 mb-6">
+                                        {PAYMENT_METHODS.map(method => {
+                                            const Icon = method.icon;
+                                            const isSelected = selectedPaymentMethod?.id === method.id;
+                                            return (
+                                                <button
+                                                    key={method.id}
+                                                    onClick={() => setSelectedPaymentMethod(method)}
+                                                    className={`p-4 rounded-lg border-2 transition-all ${
+                                                        isSelected
+                                                            ? `${method.bgColor} border-${method.color.split('-')[1]}-500`
+                                                            : 'border-gray-200 hover:border-gray-300'
+                                                    }`}>
+                                                    <Icon className={`w-8 h-8 mx-auto mb-2 ${isSelected ? method.textColor : 'text-gray-600'}`} />
+                                                    <span className={`text-sm font-medium ${isSelected ? method.textColor : 'text-gray-600'}`}>
+                                                        {method.name}
+                                                    </span>
+                                                    {method.name === 'Hotel' && isSelected && (
+                                                        <span className="text-xs text-amber-600 block mt-1">+10% Service Charge</span>
+                                                    )}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </>
+                            )}
 
                             {/* Order Summary */}
                             <div className="mb-6 p-4 bg-blue-50 rounded-lg">
@@ -1791,12 +2142,18 @@ export default function POS({
                                             <span className="font-bold">Total</span>
                                             <span className="text-2xl font-bold text-blue-600">₱{formatPrice(modalTotals.total)}</span>
                                         </div>
+                                        {modalIsPersonal && (
+                                            <div className="flex justify-between text-sm text-pink-600 mt-1">
+                                                <span>Status:</span>
+                                                <span className="font-medium">FREE ORDER (Personal)</span>
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                             </div>
 
-                            {/* Cash Input */}
-                            {selectedPaymentMethod?.name === 'Cash' && (
+                            {/* Cash Input - Only for Cash payment and not personal */}
+                            {selectedPaymentMethod?.name === 'Cash' && !modalIsPersonal && (
                                 <div className="mb-6">
                                     <label className="block text-sm font-semibold text-gray-900 mb-2">Cash Received</label>
                                     <input
@@ -1816,7 +2173,7 @@ export default function POS({
                             )}
 
                             {/* Hotel Information */}
-                            {selectedPaymentMethod?.name === 'Hotel' && (
+                            {selectedPaymentMethod?.name === 'Hotel' && !modalIsPersonal && (
                                 <div className="mb-6 space-y-4">
                                     <div>
                                         <label className="block text-sm font-semibold text-gray-900 mb-2">Guest Name</label>
@@ -1862,13 +2219,29 @@ export default function POS({
                                 </button>
                                 <button
                                     onClick={handlePlaceOrder}
-                                    disabled={!selectedPaymentMethod || isLoading}
+                                    disabled={
+                                        isLoading || 
+                                        (modalIsEmployee && !employeeInfo.name) ||
+                                        (modalIsPersonal && !personalInfo.name) ||
+                                        (!modalIsPersonal && !selectedPaymentMethod)
+                                    }
                                     className={`flex-1 py-3 rounded-lg font-bold ${
-                                        !selectedPaymentMethod || isLoading
+                                        isLoading || 
+                                        (modalIsEmployee && !employeeInfo.name) ||
+                                        (modalIsPersonal && !personalInfo.name) ||
+                                        (!modalIsPersonal && !selectedPaymentMethod)
                                             ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                                            : modalIsPersonal
+                                            ? 'bg-pink-600 text-white hover:bg-pink-700'
                                             : 'bg-blue-600 text-white hover:bg-blue-700'
                                     }`}>
-                                    {isLoading ? <Loader2 className="w-5 h-5 animate-spin mx-auto" /> : 'Confirm Order'}
+                                    {isLoading ? (
+                                        <Loader2 className="w-5 h-5 animate-spin mx-auto" />
+                                    ) : modalIsPersonal ? (
+                                        'Confirm Free Order'
+                                    ) : (
+                                        'Confirm Order'
+                                    )}
                                 </button>
                             </div>
                         </div>

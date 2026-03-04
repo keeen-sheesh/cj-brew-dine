@@ -35,6 +35,12 @@ class Category extends Model
         return $query->where('is_active', true);
     }
 
+    // Scope for kitchen categories
+    public function scopeKitchen($query)
+    {
+        return $query->where('is_kitchen_category', true);
+    }
+
     // Default order
     public static function boot()
     {

@@ -22,28 +22,44 @@ class KitchenController extends Controller
         // Get last check time from session
         $lastCheck = $request->session()->get('last_kitchen_check', now()->subMinutes(5)->timestamp);
         
-        // Get orders with kitchen items - INCLUDING COMPLETED ORDERS
-        $orders = Sale::with(['saleItems.item.category', 'customer', 'paymentMethod'])
+        // Get orders with kitchen items - INCLUDING size information
+        $orders = Sale::with([
+                'saleItems' => function($query) {
+                    $query->with(['item.category', 'size']);
+                }, 
+                'customer', 
+                'paymentMethod'
+            ])
             ->whereHas('saleItems.item.category', function($query) {
                 $query->where('is_kitchen_category', 1);
             })
-            ->whereIn('status', ['pending', 'preparing', 'ready', 'completed']) // ADDED 'completed'
+            ->whereIn('status', ['pending', 'preparing', 'ready', 'completed'])
             ->whereDate('created_at', $dateFilter)
             ->orderBy('created_at', 'asc')
             ->get()
             ->map(function($order) {
-                // Get only kitchen items
+                // Get only kitchen items with size information
                 $kitchenItems = [];
                 foreach ($order->saleItems as $item) {
                     if ($item->item && $item->item->category && $item->item->category->is_kitchen_category == 1) {
+                        // Build item name with size if available
+                        $itemName = $item->item->name;
+                        if ($item->size) {
+                            $sizeName = $item->size->display_name ?? $item->size->name;
+                            $itemName .= ' (' . $sizeName . ')';
+                        }
+                        
                         $kitchenItems[] = [
                             'id' => $item->id,
-                            'name' => $item->item->name,
+                            'name' => $itemName,
+                            'original_name' => $item->item->name,
                             'quantity' => $item->quantity,
                             'kitchen_status' => $item->kitchen_status ?? 'pending',
                             'started_at' => $item->kitchen_started_at,
                             'completed_at' => $item->kitchen_completed_at,
                             'notes' => $item->special_instructions,
+                            'size_id' => $item->size_id,
+                            'size_name' => $item->size ? ($item->size->display_name ?? $item->size->name) : null,
                         ];
                     }
                 }
@@ -140,12 +156,18 @@ class KitchenController extends Controller
             ->whereDate('created_at', $dateFilter)
             ->exists();
         
-        // Get all kitchen orders for the date - INCLUDING COMPLETED
-        $allOrders = Sale::with(['saleItems.item.category', 'customer', 'paymentMethod'])
+        // Get all kitchen orders for the date - INCLUDING size information
+        $allOrders = Sale::with([
+                'saleItems' => function($query) {
+                    $query->with(['item.category', 'size']);
+                }, 
+                'customer', 
+                'paymentMethod'
+            ])
             ->whereHas('saleItems.item.category', function($query) {
                 $query->where('is_kitchen_category', 1);
             })
-            ->whereIn('status', ['pending', 'preparing', 'ready', 'completed']) // ADDED 'completed'
+            ->whereIn('status', ['pending', 'preparing', 'ready', 'completed'])
             ->whereDate('created_at', $dateFilter)
             ->orderBy('created_at', 'asc')
             ->get()
@@ -153,12 +175,22 @@ class KitchenController extends Controller
                 $kitchenItems = [];
                 foreach ($order->saleItems as $item) {
                     if ($item->item && $item->item->category && $item->item->category->is_kitchen_category == 1) {
+                        // Build item name with size if available
+                        $itemName = $item->item->name;
+                        if ($item->size) {
+                            $sizeName = $item->size->display_name ?? $item->size->name;
+                            $itemName .= ' (' . $sizeName . ')';
+                        }
+                        
                         $kitchenItems[] = [
                             'id' => $item->id,
-                            'name' => $item->item->name,
+                            'name' => $itemName,
+                            'original_name' => $item->item->name,
                             'quantity' => $item->quantity,
                             'kitchen_status' => $item->kitchen_status ?? 'pending',
                             'notes' => $item->special_instructions,
+                            'size_id' => $item->size_id,
+                            'size_name' => $item->size ? ($item->size->display_name ?? $item->size->name) : null,
                         ];
                     }
                 }
@@ -436,11 +468,17 @@ class KitchenController extends Controller
     {
         $date = $request->get('date', now()->format('Y-m-d'));
         
-        $orders = Sale::with(['saleItems.item.category', 'customer', 'paymentMethod'])
+        $orders = Sale::with([
+                'saleItems' => function($query) {
+                    $query->with(['item.category', 'size']);
+                }, 
+                'customer', 
+                'paymentMethod'
+            ])
             ->whereHas('saleItems.item.category', function($query) {
                 $query->where('is_kitchen_category', 1);
             })
-            ->whereIn('status', ['pending', 'preparing', 'ready', 'completed']) // ADDED 'completed'
+            ->whereIn('status', ['pending', 'preparing', 'ready', 'completed'])
             ->whereDate('created_at', $date)
             ->orderBy('created_at', 'asc')
             ->get()
@@ -448,12 +486,22 @@ class KitchenController extends Controller
                 $kitchenItems = [];
                 foreach ($order->saleItems as $item) {
                     if ($item->item && $item->item->category && $item->item->category->is_kitchen_category == 1) {
+                        // Build item name with size if available
+                        $itemName = $item->item->name;
+                        if ($item->size) {
+                            $sizeName = $item->size->display_name ?? $item->size->name;
+                            $itemName .= ' (' . $sizeName . ')';
+                        }
+                        
                         $kitchenItems[] = [
                             'id' => $item->id,
-                            'name' => $item->item->name,
+                            'name' => $itemName,
+                            'original_name' => $item->item->name,
                             'quantity' => $item->quantity,
                             'kitchen_status' => $item->kitchen_status ?? 'pending',
                             'notes' => $item->special_instructions,
+                            'size_id' => $item->size_id,
+                            'size_name' => $item->size ? ($item->size->display_name ?? $item->size->name) : null,
                         ];
                     }
                 }

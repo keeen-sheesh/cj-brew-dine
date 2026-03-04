@@ -10,7 +10,7 @@ import {
   ChefHat, Loader2, RefreshCw, Image as ImageIcon, 
   Upload, Wifi, WifiOff, Star, DollarSign,
   ChevronLeft, ChevronsLeft, ChevronsRight, Coffee,
-  CupSoda, Beer, Wine, Milk
+  CupSoda, Beer, Wine, Milk, Settings, Eye
 } from 'lucide-react';
 
 // Get image URL helper function
@@ -35,10 +35,19 @@ export default function Foods({
     const { props } = usePage();
     const [currentTab, setCurrentTab] = useState('items');
     const [categories, setCategories] = useState(initialCategories);
-    const [items, setItems] = useState(initialItems);
+    const [items, setItems] = useState([]);
+    const [isLoading, setIsLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
     const [filterCategory, setFilterCategory] = useState('');
     const [sortBy, setSortBy] = useState('name');
+    
+    // Size management states
+    const [sizes, setSizes] = useState([]);
+    const [itemSizes, setItemSizes] = useState([]);
+    const [showSizeModal, setShowSizeModal] = useState(false);
+    const [selectedItemForSizes, setSelectedItemForSizes] = useState(null);
+    const [newSizePrice, setNewSizePrice] = useState({ size_id: '', price: '' });
+    const [editingSizePrice, setEditingSizePrice] = useState({ id: null, price: '' });
     
     // Pagination states
     const [currentPage, setCurrentPage] = useState(1);
@@ -71,6 +80,7 @@ export default function Foods({
         low_stock_threshold: 10,
         is_available: true,
         is_featured: false,
+        has_sizes: false,
         pricing_type: 'single',
         price_solo: '',
         price_whole: '',
@@ -95,12 +105,14 @@ export default function Foods({
         low_stock_threshold: 10,
         is_available: true,
         is_featured: false,
+        has_sizes: false,
         pricing_type: 'single',
         price_solo: '',
         price_whole: '',
         image: null,
         image_preview: null,
-        remove_image: false
+        remove_image: false,
+        sizes: []
     });
     
     const [deleteTarget, setDeleteTarget] = useState({ type: '', id: '', name: '' });
@@ -141,12 +153,12 @@ export default function Foods({
             case 'name':
                 return a.name.localeCompare(b.name);
             case 'price_low':
-                const aPrice = a.pricing_type === 'dual' ? a.price_solo : (a.price || 0);
-                const bPrice = b.pricing_type === 'dual' ? b.price_solo : (b.price || 0);
+                const aPrice = a.sizes && a.sizes.length > 0 ? Math.min(...a.sizes.map(s => s.price)) : (a.pricing_type === 'dual' ? a.price_solo : (a.price || 0));
+                const bPrice = b.sizes && b.sizes.length > 0 ? Math.min(...b.sizes.map(s => s.price)) : (b.pricing_type === 'dual' ? b.price_solo : (b.price || 0));
                 return aPrice - bPrice;
             case 'price_high':
-                const aPriceHigh = a.pricing_type === 'dual' ? a.price_solo : (a.price || 0);
-                const bPriceHigh = b.pricing_type === 'dual' ? b.price_solo : (b.price || 0);
+                const aPriceHigh = a.sizes && a.sizes.length > 0 ? Math.max(...a.sizes.map(s => s.price)) : (a.pricing_type === 'dual' ? a.price_whole : (a.price || 0));
+                const bPriceHigh = b.sizes && b.sizes.length > 0 ? Math.max(...b.sizes.map(s => s.price)) : (b.pricing_type === 'dual' ? b.price_whole : (b.price || 0));
                 return bPriceHigh - aPriceHigh;
             case 'category':
                 return (a.category_name || '').localeCompare(b.category_name || '');
@@ -173,6 +185,98 @@ export default function Foods({
     useEffect(() => {
         setCurrentPage(1);
     }, [searchTerm, filterCategory, sortBy]);
+
+    // Load all data on mount using batch endpoint
+    useEffect(() => {
+        const loadAllData = async () => {
+            setIsLoading(true);
+            try {
+                // Load categories
+                const catResponse = await fetch('/admin/food-categories', {
+                    headers: {
+                        'Accept': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest',
+                    }
+                });
+                const catData = await catResponse.json();
+                if (catData.success) {
+                    setCategories(catData.categories || []);
+                }
+                
+                // Load all items with their sizes in ONE API call
+                const itemsResponse = await fetch('/admin/items-with-sizes', {
+                    headers: {
+                        'Accept': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest',
+                    }
+                });
+                const itemsData = await itemsResponse.json();
+                if (itemsData.success) {
+                    setItems(itemsData.items || []);
+                }
+                
+                // Load sizes for the size management modal
+                const sizesResponse = await fetch('/admin/sizes', {
+                    headers: {
+                        'Accept': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest',
+                    }
+                });
+                const sizesData = await sizesResponse.json();
+                if (sizesData.success) {
+                    setSizes(sizesData.sizes || []);
+                }
+            } catch (error) {
+                console.error('Failed to load data:', error);
+            } finally {
+                setIsLoading(false);
+            }
+        };
+        loadAllData();
+    }, []);
+
+    // Fetch sizes for a specific item (for edit modal)
+    const fetchItemSizes = async (itemId) => {
+        try {
+            const response = await fetch(`/admin/items/${itemId}/sizes`, {
+                headers: {
+                    'Accept': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                }
+            });
+            const data = await response.json();
+            if (data.success) {
+                return data.sizes || [];
+            }
+            return [];
+        } catch (error) {
+            console.error('Failed to fetch item sizes:', error);
+            return [];
+        }
+    };
+
+    // Get display price for an item based on its type
+    const getItemDisplayPrice = (item) => {
+        // For items with sizes (coffee, etc.)
+        if (item.sizes && item.sizes.length > 0) {
+            const prices = item.sizes.map(s => s.price);
+            const minPrice = Math.min(...prices);
+            const maxPrice = Math.max(...prices);
+            
+            if (minPrice === maxPrice) {
+                return `₱${minPrice.toFixed(2)}`;
+            }
+            return `₱${minPrice.toFixed(2)} - ₱${maxPrice.toFixed(2)}`;
+        }
+        
+        // For dual price items (solo/whole)
+        if (item.pricing_type === 'dual') {
+            return `₱${Number(item.price_solo).toFixed(2)} - ₱${Number(item.price_whole).toFixed(2)}`;
+        }
+        
+        // For single price items
+        return item.price ? `₱${Number(item.price).toFixed(2)}` : 'No price';
+    };
 
     // Show notification
     const showNotification = (message, type = 'success') => {
@@ -287,15 +391,26 @@ export default function Foods({
                 setCategories(catData.categories || []);
             }
             
-            const itemResponse = await fetch('/admin/food-items?limit=1000', {
+            const itemsResponse = await fetch('/admin/items-with-sizes', {
                 headers: {
                     'Accept': 'application/json',
                     'X-Requested-With': 'XMLHttpRequest',
                 }
             });
-            const itemData = await itemResponse.json();
-            if (itemData.success) {
-                setItems(itemData.items || []);
+            const itemsData = await itemsResponse.json();
+            if (itemsData.success) {
+                setItems(itemsData.items || []);
+            }
+            
+            const sizesResponse = await fetch('/admin/sizes', {
+                headers: {
+                    'Accept': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                }
+            });
+            const sizesData = await sizesResponse.json();
+            if (sizesData.success) {
+                setSizes(sizesData.sizes || []);
             }
             
             showNotification('Data refreshed successfully');
@@ -417,15 +532,17 @@ export default function Foods({
             return;
         }
         
-        if (newItem.pricing_type === 'dual') {
-            if (!newItem.price_solo || !newItem.price_whole) {
-                showNotification('Both Solo and Whole prices are required', 'error');
-                return;
-            }
-        } else {
-            if (!newItem.price) {
-                showNotification('Price is required', 'error');
-                return;
+        if (!newItem.has_sizes) {
+            if (newItem.pricing_type === 'dual') {
+                if (!newItem.price_solo || !newItem.price_whole) {
+                    showNotification('Both Solo and Whole prices are required', 'error');
+                    return;
+                }
+            } else {
+                if (!newItem.price) {
+                    showNotification('Price is required', 'error');
+                    return;
+                }
             }
         }
         
@@ -444,13 +561,14 @@ export default function Foods({
         formData.append('low_stock_threshold', newItem.low_stock_threshold || 10);
         formData.append('is_available', newItem.is_available ? '1' : '0');
         formData.append('is_featured', newItem.is_featured ? '1' : '0');
+        formData.append('has_sizes', newItem.has_sizes ? '1' : '0');
         formData.append('pricing_type', newItem.pricing_type);
         
         if (newItem.pricing_type === 'dual') {
             formData.append('price', newItem.price_solo);
             formData.append('price_solo', newItem.price_solo);
             formData.append('price_whole', newItem.price_whole);
-        } else {
+        } else if (!newItem.has_sizes) {
             formData.append('price', newItem.price);
         }
         
@@ -471,14 +589,13 @@ export default function Foods({
             const data = await response.json();
             
             if (data.success) {
-                setItems(prev => [...prev, data.item]);
-                const newTotalPages = Math.ceil((filteredItems.length + 1) / itemsPerPage);
-                setCurrentPage(newTotalPages);
+                // After adding, refresh the data to get the new item with its sizes
+                await refreshData();
                 showNotification('Item added successfully');
                 setNewItem({ 
                     name: '', description: '', price: '', category_id: '',
                     stock_quantity: 0, low_stock_threshold: 10,
-                    is_available: true, is_featured: false,
+                    is_available: true, is_featured: false, has_sizes: false,
                     pricing_type: 'single',
                     price_solo: '', price_whole: '',
                     image: null, image_preview: null
@@ -541,15 +658,18 @@ export default function Foods({
             return;
         }
         
-        if (editItem.pricing_type === 'dual') {
-            if (!editItem.price_solo || !editItem.price_whole) {
-                showNotification('Both Solo and Whole prices are required', 'error');
-                return;
-            }
-        } else {
-            if (!editItem.price) {
-                showNotification('Price is required', 'error');
-                return;
+        // Skip price validation for items with sizes
+        if (!editItem.has_sizes) {
+            if (editItem.pricing_type === 'dual') {
+                if (!editItem.price_solo || !editItem.price_whole) {
+                    showNotification('Both Solo and Whole prices are required', 'error');
+                    return;
+                }
+            } else {
+                if (!editItem.price) {
+                    showNotification('Price is required', 'error');
+                    return;
+                }
             }
         }
         
@@ -569,14 +689,18 @@ export default function Foods({
         formData.append('low_stock_threshold', editItem.low_stock_threshold || 10);
         formData.append('is_available', editItem.is_available ? '1' : '0');
         formData.append('is_featured', editItem.is_featured ? '1' : '0');
+        formData.append('has_sizes', editItem.has_sizes ? '1' : '0');
         formData.append('pricing_type', editItem.pricing_type);
         
-        if (editItem.pricing_type === 'dual') {
-            formData.append('price', editItem.price_solo);
-            formData.append('price_solo', editItem.price_solo);
-            formData.append('price_whole', editItem.price_whole);
-        } else {
-            formData.append('price', editItem.price);
+        // Only send price data if item doesn't have sizes
+        if (!editItem.has_sizes) {
+            if (editItem.pricing_type === 'dual') {
+                formData.append('price', editItem.price_solo);
+                formData.append('price_solo', editItem.price_solo);
+                formData.append('price_whole', editItem.price_whole);
+            } else {
+                formData.append('price', editItem.price);
+            }
         }
         
         if (editItem.image) {
@@ -600,14 +724,154 @@ export default function Foods({
             const data = await response.json();
             
             if (data.success) {
-                setItems(prev => prev.map(item => 
-                    item.id === editItem.id ? data.item : item
-                ));
+                // After updating, refresh the data
+                await refreshData();
                 showNotification('Item updated successfully');
                 setShowEditItemModal(false);
             }
         } catch (error) {
             showNotification('Failed to update item', 'error');
+        } finally {
+            setLoading({ type: '', id: '' });
+        }
+    };
+    
+    // Update size price (for inline editing in modal)
+    const handleUpdateSizePrice = async (sizeId, newPrice) => {
+        setLoading({ type: 'update-size', id: sizeId });
+        
+        try {
+            const response = await fetch(`/admin/items/sizes/${sizeId}`, {
+                method: 'PUT',
+                headers: {
+                    'X-CSRF-TOKEN': getCsrfToken(),
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                },
+                body: JSON.stringify({
+                    price: newPrice
+                })
+            });
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                // Update in local state
+                setEditItem(prev => ({
+                    ...prev,
+                    sizes: prev.sizes.map(s => 
+                        s.id === sizeId ? { ...s, price: Number(newPrice) } : s
+                    )
+                }));
+                
+                // Also update in items list
+                setItems(prev => prev.map(item => {
+                    if (item.id === editItem.id) {
+                        const updatedSizes = (item.sizes || []).map(s => 
+                            s.id === sizeId ? { ...s, price: Number(newPrice) } : s
+                        );
+                        return { ...item, sizes: updatedSizes };
+                    }
+                    return item;
+                }));
+                
+                showNotification('Size price updated successfully');
+            }
+        } catch (error) {
+            showNotification('Failed to update size price', 'error');
+        } finally {
+            setLoading({ type: '', id: '' });
+        }
+    };
+    
+    // Add new size to item (from within edit modal)
+    const handleAddSizeToItem = async () => {
+        if (!newSizePrice.size_id || !newSizePrice.price) {
+            showNotification('Please select a size and enter a price', 'error');
+            return;
+        }
+        
+        setLoading({ type: 'add-size', id: '' });
+        
+        try {
+            const response = await fetch(`/admin/items/${editItem.id}/sizes`, {
+                method: 'POST',
+                headers: {
+                    'X-CSRF-TOKEN': getCsrfToken(),
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                },
+                body: JSON.stringify({
+                    size_id: newSizePrice.size_id,
+                    price: newSizePrice.price
+                })
+            });
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                // Add to editItem sizes
+                setEditItem(prev => ({
+                    ...prev,
+                    sizes: [...prev.sizes, data.size]
+                }));
+                
+                // Also update in items list
+                setItems(prev => prev.map(item => {
+                    if (item.id === editItem.id) {
+                        const updatedSizes = [...(item.sizes || []), data.size];
+                        return { ...item, sizes: updatedSizes };
+                    }
+                    return item;
+                }));
+                
+                setNewSizePrice({ size_id: '', price: '' });
+                showNotification('Size added successfully');
+            }
+        } catch (error) {
+            showNotification('Failed to add size', 'error');
+        } finally {
+            setLoading({ type: '', id: '' });
+        }
+    };
+    
+    // Delete size
+    const handleDeleteSize = async (sizeId) => {
+        if (!confirm('Are you sure you want to remove this size?')) return;
+        
+        setLoading({ type: 'delete-size', id: sizeId });
+        
+        try {
+            const response = await fetch(`/admin/items/sizes/${sizeId}`, {
+                method: 'DELETE',
+                headers: {
+                    'X-CSRF-TOKEN': getCsrfToken(),
+                    'Accept': 'application/json',
+                }
+            });
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                // Remove from editItem sizes
+                setEditItem(prev => ({
+                    ...prev,
+                    sizes: prev.sizes.filter(s => s.id !== sizeId)
+                }));
+                
+                // Also update in items list
+                setItems(prev => prev.map(item => {
+                    if (item.id === editItem.id) {
+                        const updatedSizes = (item.sizes || []).filter(s => s.id !== sizeId);
+                        return { ...item, sizes: updatedSizes };
+                    }
+                    return item;
+                }));
+                
+                showNotification('Size removed successfully');
+            }
+        } catch (error) {
+            showNotification('Failed to remove size', 'error');
         } finally {
             setLoading({ type: '', id: '' });
         }
@@ -697,7 +961,13 @@ export default function Foods({
         setShowEditCategoryModal(true);
     };
     
-    const openEditItemModal = (item) => {
+    const openEditItemModal = async (item) => {
+        // Fetch latest sizes for this item
+        const itemSizes = await fetchItemSizes(item.id);
+        
+        // Ensure has_sizes is true if there are sizes
+        const hasSizes = item.has_sizes || (itemSizes && itemSizes.length > 0);
+        
         setEditItem({
             id: item.id,
             name: item.name,
@@ -708,13 +978,18 @@ export default function Foods({
             low_stock_threshold: item.low_stock_threshold || 10,
             is_available: item.is_available !== false,
             is_featured: item.is_featured || false,
+            has_sizes: hasSizes,
             pricing_type: item.pricing_type || 'single',
             price_solo: item.price_solo || '',
             price_whole: item.price_whole || '',
             image: null,
             image_preview: item.image ? getImageUrl(item.image) : null,
-            remove_image: false
+            remove_image: false,
+            sizes: itemSizes
         });
+        
+        // Reset new size price
+        setNewSizePrice({ size_id: '', price: '' });
         setShowEditItemModal(true);
     };
     
@@ -722,6 +997,13 @@ export default function Foods({
     const openDeleteModal = (type, id, name) => {
         setDeleteTarget({ type, id, name });
         setShowDeleteModal(true);
+    };
+    
+    // Open size management modal
+    const openSizeModal = (item) => {
+        setSelectedItemForSizes(item);
+        setItemSizes(item.sizes || []);
+        setShowSizeModal(true);
     };
     
     // View image
@@ -877,6 +1159,17 @@ export default function Foods({
             </div>
         );
     };
+    
+    if (isLoading) {
+        return (
+            <AdminLayout>
+                <div className="flex items-center justify-center min-h-screen">
+                    <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
+                    <span className="ml-2 text-gray-600">Loading menu...</span>
+                </div>
+            </AdminLayout>
+        );
+    }
     
     return (
         <AdminLayout>
@@ -1279,6 +1572,9 @@ export default function Foods({
                                     paginatedItems.map((item) => {
                                         const isLowStock = item.stock_quantity !== null && 
                                                            item.stock_quantity <= item.low_stock_threshold;
+                                        const displayPrice = getItemDisplayPrice(item);
+                                        const hasSizes = item.sizes && item.sizes.length > 0;
+                                        
                                         return (
                                             <div key={item.id} className="bg-gray-50 rounded-lg border border-gray-200 overflow-hidden hover:shadow-lg transition-shadow">
                                                 <div 
@@ -1312,24 +1608,20 @@ export default function Foods({
                                                             Unavailable
                                                         </div>
                                                     )}
+                                                    {hasSizes && (
+                                                        <div className="absolute bottom-2 left-2 px-2 py-1 bg-purple-500 text-white text-xs font-medium rounded-full flex items-center">
+                                                            <Settings className="h-3 w-3 mr-1" />
+                                                            Multiple Sizes
+                                                        </div>
+                                                    )}
                                                 </div>
                                                 
                                                 <div className="p-4">
                                                     <div className="flex justify-between items-start mb-2">
                                                         <h3 className="font-semibold text-gray-900">{item.name}</h3>
-                                                        {item.pricing_type === 'dual' ? (
-                                                            <div className="text-right">
-                                                                <span className="text-xs text-gray-500 block">Solo: {formatPrice(item.price_solo)}</span>
-                                                                <span className="text-xs text-gray-500 block">Whole: {formatPrice(item.price_whole)}</span>
-                                                                <span className="text-sm font-bold text-blue-600 mt-1 block">
-                                                                    {formatPrice(item.price_solo)} - {formatPrice(item.price_whole)}
-                                                                </span>
-                                                            </div>
-                                                        ) : (
-                                                            <span className="text-lg font-bold text-emerald-600">
-                                                                {formatPrice(item.price)}
-                                                            </span>
-                                                        )}
+                                                        <span className="text-lg font-bold text-emerald-600">
+                                                            {displayPrice}
+                                                        </span>
                                                     </div>
                                                     
                                                     {item.description && (
@@ -1367,6 +1659,15 @@ export default function Foods({
                                                         </button>
                                                         
                                                         <div className="flex gap-1">
+                                                            {hasSizes && (
+                                                                <button
+                                                                    onClick={() => openSizeModal(item)}
+                                                                    className="p-2 text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
+                                                                    title="Manage Sizes"
+                                                                >
+                                                                    <Settings className="h-4 w-4" />
+                                                                </button>
+                                                            )}
                                                             <button
                                                                 onClick={() => openEditItemModal(item)}
                                                                 className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
@@ -1431,6 +1732,8 @@ export default function Foods({
                                     </label>
                                     <input
                                         type="text"
+                                        id="category-name"
+                                        name="category-name"
                                         value={newCategory.name}
                                         onChange={(e) => setNewCategory({...newCategory, name: e.target.value})}
                                         className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -1441,6 +1744,8 @@ export default function Foods({
                                 <div>
                                     <label className="text-sm font-medium text-gray-700 mb-1 block">Description</label>
                                     <textarea
+                                        id="category-description"
+                                        name="category-description"
                                         value={newCategory.description}
                                         onChange={(e) => setNewCategory({...newCategory, description: e.target.value})}
                                         className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -1452,6 +1757,7 @@ export default function Foods({
                                     <input
                                         type="checkbox"
                                         id="add_is_kitchen_category"
+                                        name="add_is_kitchen_category"
                                         checked={newCategory.is_kitchen_category}
                                         onChange={(e) => setNewCategory({...newCategory, is_kitchen_category: e.target.checked})}
                                         className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
@@ -1504,7 +1810,7 @@ export default function Foods({
                                     setNewItem({ 
                                         name: '', description: '', price: '', category_id: '',
                                         stock_quantity: 0, low_stock_threshold: 10,
-                                        is_available: true, is_featured: false,
+                                        is_available: true, is_featured: false, has_sizes: false,
                                         pricing_type: 'single',
                                         price_solo: '', price_whole: '',
                                         image: null, image_preview: null
@@ -1548,6 +1854,7 @@ export default function Foods({
                                             <input
                                                 type="file"
                                                 id="add-item-image"
+                                                name="add-item-image"
                                                 ref={addImageInputRef}
                                                 onChange={handleAddImageSelect}
                                                 accept="image/*"
@@ -1575,6 +1882,8 @@ export default function Foods({
                                         </label>
                                         <input
                                             type="text"
+                                            id="item-name"
+                                            name="item-name"
                                             value={newItem.name}
                                             onChange={(e) => setNewItem({...newItem, name: e.target.value})}
                                             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
@@ -1587,6 +1896,8 @@ export default function Foods({
                                             Category <span className="text-red-500">*</span>
                                         </label>
                                         <select
+                                            id="item-category"
+                                            name="item-category"
                                             value={newItem.category_id}
                                             onChange={(e) => setNewItem({...newItem, category_id: e.target.value})}
                                             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
@@ -1605,6 +1916,8 @@ export default function Foods({
                                 <div>
                                     <label className="text-sm font-medium text-gray-700 mb-1 block">Description</label>
                                     <textarea
+                                        id="item-description"
+                                        name="item-description"
                                         value={newItem.description}
                                         onChange={(e) => setNewItem({...newItem, description: e.target.value})}
                                         className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
@@ -1613,107 +1926,145 @@ export default function Foods({
                                     />
                                 </div>
 
-                                {/* Pricing Type Selection */}
-                                <div>
-                                    <label className="text-sm font-medium text-gray-700 mb-2 block">Pricing Type</label>
-                                    <div className="flex gap-4">
-                                        <label className="flex items-center">
-                                            <input
-                                                type="radio"
-                                                name="pricing_type"
-                                                value="single"
-                                                checked={newItem.pricing_type === 'single'}
-                                                onChange={(e) => setNewItem({...newItem, pricing_type: e.target.value})}
-                                                className="h-4 w-4 text-emerald-600 focus:ring-emerald-500"
-                                            />
-                                            <span className="ml-2 text-sm text-gray-700">Single Price</span>
-                                        </label>
-                                        <label className="flex items-center">
-                                            <input
-                                                type="radio"
-                                                name="pricing_type"
-                                                value="dual"
-                                                checked={newItem.pricing_type === 'dual'}
-                                                onChange={(e) => setNewItem({...newItem, pricing_type: e.target.value})}
-                                                className="h-4 w-4 text-emerald-600 focus:ring-emerald-500"
-                                            />
-                                            <span className="ml-2 text-sm text-gray-700">Solo/Whole (Dual Price)</span>
-                                        </label>
-                                    </div>
+                                {/* Has Sizes Checkbox */}
+                                <div className="flex items-center">
+                                    <input
+                                        type="checkbox"
+                                        id="add_has_sizes"
+                                        name="add_has_sizes"
+                                        checked={newItem.has_sizes}
+                                        onChange={(e) => setNewItem({...newItem, has_sizes: e.target.checked})}
+                                        className="h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded"
+                                    />
+                                    <label htmlFor="add_has_sizes" className="ml-2 text-sm text-gray-700">
+                                        This item has multiple sizes (e.g., Tall, Grande, Venti)
+                                    </label>
                                 </div>
 
-                                {newItem.pricing_type === 'dual' ? (
-                                    <div className="grid grid-cols-2 gap-4">
+                                {!newItem.has_sizes && (
+                                    <>
+                                        {/* Pricing Type Selection - Only for items without sizes */}
                                         <div>
-                                            <label className="text-sm font-medium text-gray-700 mb-1 block">
-                                                Solo Price (₱) <span className="text-red-500">*</span>
-                                            </label>
-                                            <input
-                                                type="number"
-                                                step="0.01"
-                                                min="0"
-                                                value={newItem.price_solo}
-                                                onChange={(e) => setNewItem({...newItem, price_solo: e.target.value})}
-                                                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-                                                placeholder="0.00"
-                                                required={newItem.pricing_type === 'dual'}
-                                            />
+                                            <label className="text-sm font-medium text-gray-700 mb-2 block">Pricing Type</label>
+                                            <div className="flex gap-4">
+                                                <label className="flex items-center">
+                                                    <input
+                                                        type="radio"
+                                                        name="pricing_type"
+                                                        value="single"
+                                                        checked={newItem.pricing_type === 'single'}
+                                                        onChange={(e) => setNewItem({...newItem, pricing_type: e.target.value})}
+                                                        className="h-4 w-4 text-emerald-600 focus:ring-emerald-500"
+                                                    />
+                                                    <span className="ml-2 text-sm text-gray-700">Single Price</span>
+                                                </label>
+                                                <label className="flex items-center">
+                                                    <input
+                                                        type="radio"
+                                                        name="pricing_type"
+                                                        value="dual"
+                                                        checked={newItem.pricing_type === 'dual'}
+                                                        onChange={(e) => setNewItem({...newItem, pricing_type: e.target.value})}
+                                                        className="h-4 w-4 text-emerald-600 focus:ring-emerald-500"
+                                                    />
+                                                    <span className="ml-2 text-sm text-gray-700">Solo/Whole (Dual Price)</span>
+                                                </label>
+                                            </div>
                                         </div>
-                                        <div>
-                                            <label className="text-sm font-medium text-gray-700 mb-1 block">
-                                                Whole Price (₱) <span className="text-red-500">*</span>
-                                            </label>
-                                            <input
-                                                type="number"
-                                                step="0.01"
-                                                min="0"
-                                                value={newItem.price_whole}
-                                                onChange={(e) => setNewItem({...newItem, price_whole: e.target.value})}
-                                                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-                                                placeholder="0.00"
-                                                required={newItem.pricing_type === 'dual'}
-                                            />
-                                        </div>
-                                    </div>
-                                ) : (
-                                    <div className="grid grid-cols-3 gap-4">
-                                        <div>
-                                            <label className="text-sm font-medium text-gray-700 mb-1 block">
-                                                Price (₱) <span className="text-red-500">*</span>
-                                            </label>
-                                            <input
-                                                type="number"
-                                                step="0.01"
-                                                min="0"
-                                                value={newItem.price}
-                                                onChange={(e) => setNewItem({...newItem, price: e.target.value})}
-                                                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-                                                placeholder="0.00"
-                                                required={newItem.pricing_type === 'single'}
-                                            />
-                                        </div>
-                                        <div>
-                                            <label className="text-sm font-medium text-gray-700 mb-1 block">Stock Quantity</label>
-                                            <input
-                                                type="number"
-                                                min="0"
-                                                value={newItem.stock_quantity}
-                                                onChange={(e) => setNewItem({...newItem, stock_quantity: parseInt(e.target.value) || 0})}
-                                                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-                                                placeholder="0"
-                                            />
-                                        </div>
-                                        <div>
-                                            <label className="text-sm font-medium text-gray-700 mb-1 block">Low Stock Threshold</label>
-                                            <input
-                                                type="number"
-                                                min="0"
-                                                value={newItem.low_stock_threshold}
-                                                onChange={(e) => setNewItem({...newItem, low_stock_threshold: parseInt(e.target.value) || 10})}
-                                                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-                                                placeholder="10"
-                                            />
-                                        </div>
+
+                                        {newItem.pricing_type === 'dual' ? (
+                                            <div className="grid grid-cols-2 gap-4">
+                                                <div>
+                                                    <label className="text-sm font-medium text-gray-700 mb-1 block">
+                                                        Solo Price (₱) <span className="text-red-500">*</span>
+                                                    </label>
+                                                    <input
+                                                        type="number"
+                                                        id="solo-price"
+                                                        name="solo-price"
+                                                        step="0.01"
+                                                        min="0"
+                                                        value={newItem.price_solo}
+                                                        onChange={(e) => setNewItem({...newItem, price_solo: e.target.value})}
+                                                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                                                        placeholder="0.00"
+                                                        required={newItem.pricing_type === 'dual'}
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="text-sm font-medium text-gray-700 mb-1 block">
+                                                        Whole Price (₱) <span className="text-red-500">*</span>
+                                                    </label>
+                                                    <input
+                                                        type="number"
+                                                        id="whole-price"
+                                                        name="whole-price"
+                                                        step="0.01"
+                                                        min="0"
+                                                        value={newItem.price_whole}
+                                                        onChange={(e) => setNewItem({...newItem, price_whole: e.target.value})}
+                                                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                                                        placeholder="0.00"
+                                                        required={newItem.pricing_type === 'dual'}
+                                                    />
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div className="grid grid-cols-3 gap-4">
+                                                <div>
+                                                    <label className="text-sm font-medium text-gray-700 mb-1 block">
+                                                        Price (₱) <span className="text-red-500">*</span>
+                                                    </label>
+                                                    <input
+                                                        type="number"
+                                                        id="price"
+                                                        name="price"
+                                                        step="0.01"
+                                                        min="0"
+                                                        value={newItem.price}
+                                                        onChange={(e) => setNewItem({...newItem, price: e.target.value})}
+                                                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                                                        placeholder="0.00"
+                                                        required={newItem.pricing_type === 'single'}
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="text-sm font-medium text-gray-700 mb-1 block">Stock Quantity</label>
+                                                    <input
+                                                        type="number"
+                                                        id="stock-quantity"
+                                                        name="stock-quantity"
+                                                        min="0"
+                                                        value={newItem.stock_quantity}
+                                                        onChange={(e) => setNewItem({...newItem, stock_quantity: parseInt(e.target.value) || 0})}
+                                                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                                                        placeholder="0"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="text-sm font-medium text-gray-700 mb-1 block">Low Stock Threshold</label>
+                                                    <input
+                                                        type="number"
+                                                        id="low-stock-threshold"
+                                                        name="low-stock-threshold"
+                                                        min="0"
+                                                        value={newItem.low_stock_threshold}
+                                                        onChange={(e) => setNewItem({...newItem, low_stock_threshold: parseInt(e.target.value) || 10})}
+                                                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                                                        placeholder="10"
+                                                    />
+                                                </div>
+                                            </div>
+                                        )}
+                                    </>
+                                )}
+
+                                {newItem.has_sizes && (
+                                    <div className="bg-purple-50 p-4 rounded-lg border border-purple-200">
+                                        <p className="text-sm text-purple-700 flex items-center">
+                                            <Settings className="h-4 w-4 mr-2" />
+                                            You can add sizes (Tall, Grande, Venti, etc.) after creating the item.
+                                        </p>
                                     </div>
                                 )}
 
@@ -1721,6 +2072,8 @@ export default function Foods({
                                     <label className="flex items-center">
                                         <input
                                             type="checkbox"
+                                            id="is-available"
+                                            name="is-available"
                                             checked={newItem.is_available}
                                             onChange={(e) => setNewItem({...newItem, is_available: e.target.checked})}
                                             className="h-4 w-4 text-emerald-600 focus:ring-emerald-500 border-gray-300 rounded"
@@ -1730,6 +2083,8 @@ export default function Foods({
                                     <label className="flex items-center">
                                         <input
                                             type="checkbox"
+                                            id="is-featured"
+                                            name="is-featured"
                                             checked={newItem.is_featured}
                                             onChange={(e) => setNewItem({...newItem, is_featured: e.target.checked})}
                                             className="h-4 w-4 text-amber-600 focus:ring-amber-500 border-gray-300 rounded"
@@ -1747,7 +2102,7 @@ export default function Foods({
                                         setNewItem({ 
                                             name: '', description: '', price: '', category_id: '',
                                             stock_quantity: 0, low_stock_threshold: 10,
-                                            is_available: true, is_featured: false,
+                                            is_available: true, is_featured: false, has_sizes: false,
                                             pricing_type: 'single',
                                             price_solo: '', price_whole: '',
                                             image: null, image_preview: null
@@ -1801,6 +2156,8 @@ export default function Foods({
                                     </label>
                                     <input
                                         type="text"
+                                        id="edit-category-name"
+                                        name="edit-category-name"
                                         value={editCategory.name}
                                         onChange={(e) => setEditCategory({...editCategory, name: e.target.value})}
                                         className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -1810,6 +2167,8 @@ export default function Foods({
                                 <div>
                                     <label className="text-sm font-medium text-gray-700 mb-1 block">Description</label>
                                     <textarea
+                                        id="edit-category-description"
+                                        name="edit-category-description"
                                         value={editCategory.description}
                                         onChange={(e) => setEditCategory({...editCategory, description: e.target.value})}
                                         className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -1820,6 +2179,7 @@ export default function Foods({
                                     <input
                                         type="checkbox"
                                         id="edit_is_kitchen_category"
+                                        name="edit_is_kitchen_category"
                                         checked={editCategory.is_kitchen_category}
                                         onChange={(e) => setEditCategory({...editCategory, is_kitchen_category: e.target.checked})}
                                         className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
@@ -1855,7 +2215,7 @@ export default function Foods({
                 </div>
             )}
             
-            {/* Edit Item Modal */}
+            {/* Edit Item Modal - Shows sizes with editable prices AND add size option */}
             {showEditItemModal && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
                     <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
@@ -1906,6 +2266,7 @@ export default function Foods({
                                             <input
                                                 type="file"
                                                 id="edit-item-image"
+                                                name="edit-item-image"
                                                 ref={editImageInputRef}
                                                 onChange={handleEditImageSelect}
                                                 accept="image/*"
@@ -1933,6 +2294,8 @@ export default function Foods({
                                         </label>
                                         <input
                                             type="text"
+                                            id="edit-item-name"
+                                            name="edit-item-name"
                                             value={editItem.name}
                                             onChange={(e) => setEditItem({...editItem, name: e.target.value})}
                                             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
@@ -1944,6 +2307,8 @@ export default function Foods({
                                             Category <span className="text-red-500">*</span>
                                         </label>
                                         <select
+                                            id="edit-item-category"
+                                            name="edit-item-category"
                                             value={editItem.category_id}
                                             onChange={(e) => setEditItem({...editItem, category_id: e.target.value})}
                                             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
@@ -1961,6 +2326,8 @@ export default function Foods({
                                 <div>
                                     <label className="text-sm font-medium text-gray-700 mb-1 block">Description</label>
                                     <textarea
+                                        id="edit-item-description"
+                                        name="edit-item-description"
                                         value={editItem.description}
                                         onChange={(e) => setEditItem({...editItem, description: e.target.value})}
                                         className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
@@ -1968,112 +2335,221 @@ export default function Foods({
                                     />
                                 </div>
 
-                                {/* Pricing Type Selection */}
-                                <div>
-                                    <label className="text-sm font-medium text-gray-700 mb-2 block">Pricing Type</label>
-                                    <div className="flex gap-4">
-                                        <label className="flex items-center">
-                                            <input
-                                                type="radio"
-                                                name="edit_pricing_type"
-                                                value="single"
-                                                checked={editItem.pricing_type === 'single'}
-                                                onChange={(e) => setEditItem({...editItem, pricing_type: e.target.value})}
-                                                className="h-4 w-4 text-emerald-600 focus:ring-emerald-500"
-                                            />
-                                            <span className="ml-2 text-sm text-gray-700">Single Price</span>
-                                        </label>
-                                        <label className="flex items-center">
-                                            <input
-                                                type="radio"
-                                                name="edit_pricing_type"
-                                                value="dual"
-                                                checked={editItem.pricing_type === 'dual'}
-                                                onChange={(e) => setEditItem({...editItem, pricing_type: e.target.value})}
-                                                className="h-4 w-4 text-emerald-600 focus:ring-emerald-500"
-                                            />
-                                            <span className="ml-2 text-sm text-gray-700">Solo/Whole (Dual Price)</span>
-                                        </label>
-                                    </div>
-                                </div>
+                                {/* SHOW SIZES FOR ITEMS WITH SIZES - WITH EDITABLE PRICES AND ADD SIZE OPTION */}
+                                {editItem.has_sizes ? (
+                                    <>
+                                        <div className="bg-purple-50 p-4 rounded-lg border border-purple-200">
+                                            <div className="flex justify-between items-center mb-3">
+                                                <h4 className="text-sm font-medium text-purple-700">Size Options:</h4>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setShowSizeModal(true)}
+                                                    className="text-xs px-3 py-1.5 bg-purple-600 text-white rounded-lg hover:bg-purple-700 flex items-center"
+                                                >
+                                                    <Plus className="h-3 w-3 mr-1" />
+                                                    Add Size
+                                                </button>
+                                            </div>
+                                            {editItem.sizes && editItem.sizes.length > 0 ? (
+                                                <div className="space-y-3">
+                                                    {editItem.sizes.map(size => (
+                                                        <div key={size.id} className="flex items-center justify-between bg-white p-3 rounded border border-purple-100">
+                                                            <span className="text-sm font-medium text-gray-700">
+                                                                {size.display_name || size.size_name}
+                                                            </span>
+                                                            <div className="flex items-center gap-2">
+                                                                <div className="flex items-center">
+                                                                    <input
+                                                                        type="number"
+                                                                        id={`size-price-${size.id}`}
+                                                                        name={`size-price-${size.id}`}
+                                                                        step="0.01"
+                                                                        min="0"
+                                                                        value={size.price}
+                                                                        onChange={(e) => {
+                                                                            const newPrice = e.target.value;
+                                                                            setEditItem(prev => ({
+                                                                                ...prev,
+                                                                                sizes: prev.sizes.map(s => 
+                                                                                    s.id === size.id ? { ...s, price: Number(newPrice) } : s
+                                                                                )
+                                                                            }));
+                                                                        }}
+                                                                        onBlur={() => handleUpdateSizePrice(size.id, size.price)}
+                                                                        className="w-24 px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-purple-500"
+                                                                    />
+                                                                    <span className="ml-1 text-sm text-gray-500">₱</span>
+                                                                </div>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => handleDeleteSize(size.id)}
+                                                                    className="p-1 text-red-600 hover:bg-red-50 rounded"
+                                                                    title="Remove size"
+                                                                >
+                                                                    <Trash2 className="h-4 w-4" />
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            ) : (
+                                                <p className="text-sm text-gray-500 italic py-2">No sizes added yet. Click "Add Size" to add one.</p>
+                                            )}
+                                            <p className="text-xs text-gray-500 mt-2">
+                                                Stock quantity applies to all sizes
+                                            </p>
+                                        </div>
 
-                                {editItem.pricing_type === 'dual' ? (
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div>
-                                            <label className="text-sm font-medium text-gray-700 mb-1 block">
-                                                Solo Price (₱) <span className="text-red-500">*</span>
-                                            </label>
-                                            <input
-                                                type="number"
-                                                step="0.01"
-                                                min="0"
-                                                value={editItem.price_solo}
-                                                onChange={(e) => setEditItem({...editItem, price_solo: e.target.value})}
-                                                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-                                                placeholder="0.00"
-                                                required={editItem.pricing_type === 'dual'}
-                                            />
+                                        {/* Stock Quantity Section */}
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="text-sm font-medium text-gray-700 mb-1 block">Stock Quantity</label>
+                                                <input
+                                                    type="number"
+                                                    id="edit-stock-quantity"
+                                                    name="edit-stock-quantity"
+                                                    min="0"
+                                                    value={editItem.stock_quantity}
+                                                    onChange={(e) => setEditItem({...editItem, stock_quantity: parseInt(e.target.value) || 0})}
+                                                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="text-sm font-medium text-gray-700 mb-1 block">Low Stock Threshold</label>
+                                                <input
+                                                    type="number"
+                                                    id="edit-low-stock-threshold"
+                                                    name="edit-low-stock-threshold"
+                                                    min="0"
+                                                    value={editItem.low_stock_threshold}
+                                                    onChange={(e) => setEditItem({...editItem, low_stock_threshold: parseInt(e.target.value) || 10})}
+                                                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                                                />
+                                            </div>
                                         </div>
-                                        <div>
-                                            <label className="text-sm font-medium text-gray-700 mb-1 block">
-                                                Whole Price (₱) <span className="text-red-500">*</span>
-                                            </label>
-                                            <input
-                                                type="number"
-                                                step="0.01"
-                                                min="0"
-                                                value={editItem.price_whole}
-                                                onChange={(e) => setEditItem({...editItem, price_whole: e.target.value})}
-                                                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-                                                placeholder="0.00"
-                                                required={editItem.pricing_type === 'dual'}
-                                            />
-                                        </div>
-                                    </div>
+                                    </>
                                 ) : (
-                                    <div className="grid grid-cols-3 gap-4">
+                                    /* FOR ITEMS WITHOUT SIZES - Show pricing section */
+                                    <>
                                         <div>
-                                            <label className="text-sm font-medium text-gray-700 mb-1 block">
-                                                Price (₱) <span className="text-red-500">*</span>
-                                            </label>
-                                            <input
-                                                type="number"
-                                                step="0.01"
-                                                min="0"
-                                                value={editItem.price}
-                                                onChange={(e) => setEditItem({...editItem, price: e.target.value})}
-                                                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-                                                placeholder="0.00"
-                                                required={editItem.pricing_type === 'single'}
-                                            />
+                                            <label className="text-sm font-medium text-gray-700 mb-2 block">Pricing Type</label>
+                                            <div className="flex gap-4">
+                                                <label className="flex items-center">
+                                                    <input
+                                                        type="radio"
+                                                        name="edit_pricing_type"
+                                                        value="single"
+                                                        checked={editItem.pricing_type === 'single'}
+                                                        onChange={(e) => setEditItem({...editItem, pricing_type: e.target.value})}
+                                                        className="h-4 w-4 text-emerald-600 focus:ring-emerald-500"
+                                                    />
+                                                    <span className="ml-2 text-sm text-gray-700">Single Price</span>
+                                                </label>
+                                                <label className="flex items-center">
+                                                    <input
+                                                        type="radio"
+                                                        name="edit_pricing_type"
+                                                        value="dual"
+                                                        checked={editItem.pricing_type === 'dual'}
+                                                        onChange={(e) => setEditItem({...editItem, pricing_type: e.target.value})}
+                                                        className="h-4 w-4 text-emerald-600 focus:ring-emerald-500"
+                                                    />
+                                                    <span className="ml-2 text-sm text-gray-700">Solo/Whole (Dual Price)</span>
+                                                </label>
+                                            </div>
                                         </div>
-                                        <div>
-                                            <label className="text-sm font-medium text-gray-700 mb-1 block">Stock Quantity</label>
-                                            <input
-                                                type="number"
-                                                min="0"
-                                                value={editItem.stock_quantity}
-                                                onChange={(e) => setEditItem({...editItem, stock_quantity: parseInt(e.target.value) || 0})}
-                                                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-                                            />
-                                        </div>
-                                        <div>
-                                            <label className="text-sm font-medium text-gray-700 mb-1 block">Low Stock Threshold</label>
-                                            <input
-                                                type="number"
-                                                min="0"
-                                                value={editItem.low_stock_threshold}
-                                                onChange={(e) => setEditItem({...editItem, low_stock_threshold: parseInt(e.target.value) || 10})}
-                                                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-                                            />
-                                        </div>
-                                    </div>
+
+                                        {editItem.pricing_type === 'dual' ? (
+                                            <div className="grid grid-cols-2 gap-4">
+                                                <div>
+                                                    <label className="text-sm font-medium text-gray-700 mb-1 block">
+                                                        Solo Price (₱) <span className="text-red-500">*</span>
+                                                    </label>
+                                                    <input
+                                                        type="number"
+                                                        id="edit-solo-price"
+                                                        name="edit-solo-price"
+                                                        step="0.01"
+                                                        min="0"
+                                                        value={editItem.price_solo}
+                                                        onChange={(e) => setEditItem({...editItem, price_solo: e.target.value})}
+                                                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                                                        placeholder="0.00"
+                                                        required={editItem.pricing_type === 'dual'}
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="text-sm font-medium text-gray-700 mb-1 block">
+                                                        Whole Price (₱) <span className="text-red-500">*</span>
+                                                    </label>
+                                                    <input
+                                                        type="number"
+                                                        id="edit-whole-price"
+                                                        name="edit-whole-price"
+                                                        step="0.01"
+                                                        min="0"
+                                                        value={editItem.price_whole}
+                                                        onChange={(e) => setEditItem({...editItem, price_whole: e.target.value})}
+                                                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                                                        placeholder="0.00"
+                                                        required={editItem.pricing_type === 'dual'}
+                                                    />
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div className="grid grid-cols-3 gap-4">
+                                                <div>
+                                                    <label className="text-sm font-medium text-gray-700 mb-1 block">
+                                                        Price (₱) <span className="text-red-500">*</span>
+                                                    </label>
+                                                    <input
+                                                        type="number"
+                                                        id="edit-price"
+                                                        name="edit-price"
+                                                        step="0.01"
+                                                        min="0"
+                                                        value={editItem.price}
+                                                        onChange={(e) => setEditItem({...editItem, price: e.target.value})}
+                                                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                                                        placeholder="0.00"
+                                                        required={editItem.pricing_type === 'single'}
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="text-sm font-medium text-gray-700 mb-1 block">Stock Quantity</label>
+                                                    <input
+                                                        type="number"
+                                                        id="edit-stock-quantity"
+                                                        name="edit-stock-quantity"
+                                                        min="0"
+                                                        value={editItem.stock_quantity}
+                                                        onChange={(e) => setEditItem({...editItem, stock_quantity: parseInt(e.target.value) || 0})}
+                                                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="text-sm font-medium text-gray-700 mb-1 block">Low Stock Threshold</label>
+                                                    <input
+                                                        type="number"
+                                                        id="edit-low-stock-threshold"
+                                                        name="edit-low-stock-threshold"
+                                                        min="0"
+                                                        value={editItem.low_stock_threshold}
+                                                        onChange={(e) => setEditItem({...editItem, low_stock_threshold: parseInt(e.target.value) || 10})}
+                                                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                                                    />
+                                                </div>
+                                            </div>
+                                        )}
+                                    </>
                                 )}
 
                                 <div className="flex items-center gap-6">
                                     <label className="flex items-center">
                                         <input
                                             type="checkbox"
+                                            id="edit-is-available"
+                                            name="edit-is-available"
                                             checked={editItem.is_available}
                                             onChange={(e) => setEditItem({...editItem, is_available: e.target.checked})}
                                             className="h-4 w-4 text-emerald-600 focus:ring-emerald-500 border-gray-300 rounded"
@@ -2083,6 +2559,8 @@ export default function Foods({
                                     <label className="flex items-center">
                                         <input
                                             type="checkbox"
+                                            id="edit-is-featured"
+                                            name="edit-is-featured"
                                             checked={editItem.is_featured}
                                             onChange={(e) => setEditItem({...editItem, is_featured: e.target.checked})}
                                             className="h-4 w-4 text-amber-600 focus:ring-amber-500 border-gray-300 rounded"
@@ -2114,6 +2592,100 @@ export default function Foods({
                                 </button>
                             </div>
                         </form>
+                    </div>
+                </div>
+            )}
+            
+            {/* Size Management Modal (for adding new sizes) */}
+            {showSizeModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+                    <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4">
+                        <div className="flex justify-between items-center px-6 py-4 border-b border-gray-100">
+                            <div className="flex items-center">
+                                <div className="p-2 bg-purple-100 rounded-lg mr-3">
+                                    <Plus className="h-5 w-5 text-purple-600" />
+                                </div>
+                                <h3 className="text-lg font-semibold text-gray-900">Add New Size</h3>
+                            </div>
+                            <button 
+                                onClick={() => {
+                                    setShowSizeModal(false);
+                                    setNewSizePrice({ size_id: '', price: '' });
+                                }}
+                                className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100"
+                            >
+                                <X className="h-5 w-5" />
+                            </button>
+                        </div>
+                        
+                        <div className="p-6">
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="text-sm font-medium text-gray-700 mb-1 block">Select Size</label>
+                                    <select
+                                        id="size-select"
+                                        name="size-select"
+                                        value={newSizePrice.size_id}
+                                        onChange={(e) => setNewSizePrice({ ...newSizePrice, size_id: e.target.value })}
+                                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                                    >
+                                        <option value="">Choose a size</option>
+                                        {sizes.map(size => {
+                                            // Filter out sizes already added
+                                            const isAlreadyAdded = editItem.sizes?.some(s => s.size_id === size.id);
+                                            return !isAlreadyAdded && (
+                                                <option key={size.id} value={size.id}>
+                                                    {size.display_name || size.name}
+                                                </option>
+                                            );
+                                        })}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="text-sm font-medium text-gray-700 mb-1 block">Price (₱)</label>
+                                    <input
+                                        type="number"
+                                        id="size-price"
+                                        name="size-price"
+                                        step="0.01"
+                                        min="0"
+                                        value={newSizePrice.price}
+                                        onChange={(e) => setNewSizePrice({ ...newSizePrice, price: e.target.value })}
+                                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                                        placeholder="0.00"
+                                    />
+                                </div>
+                            </div>
+                            
+                            <div className="mt-6 flex justify-end gap-3">
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setShowSizeModal(false);
+                                        setNewSizePrice({ size_id: '', price: '' });
+                                    }}
+                                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={async () => {
+                                        await handleAddSizeToItem();
+                                        setShowSizeModal(false);
+                                    }}
+                                    className="px-4 py-2 text-sm font-medium text-white bg-purple-600 hover:bg-purple-700 rounded-lg flex items-center"
+                                    disabled={loading.type === 'add-size'}
+                                >
+                                    {loading.type === 'add-size' ? (
+                                        <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                                    ) : (
+                                        <Plus className="h-4 w-4 mr-2" />
+                                    )}
+                                    Add Size
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             )}
