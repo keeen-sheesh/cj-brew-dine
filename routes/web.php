@@ -11,7 +11,13 @@ use App\Http\Controllers\Admin\KitchenController;
 use App\Http\Controllers\Cashier\DashboardController as CashierDashboardController;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\Session;
 use Inertia\Inertia;
+
+// CSRF Token endpoint for JavaScript refresh
+Route::get('/csrf-token', function () {
+    return response()->json(['token' => csrf_token()]);
+});
 
 // Public routes
 Route::get('/', function () {
@@ -53,6 +59,17 @@ Route::middleware(['auth', 'verified', 'role:admin,resto_admin'])->prefix('admin
     Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
     Route::get('/transactions', [DashboardController::class, 'transactions'])->name('transactions');
     Route::get('/transactions/{id}', [DashboardController::class, 'getTransaction'])->name('transactions.show');
+
+    // ==================== USER MANAGEMENT ROUTES ====================
+    Route::get('/users', [UserController::class, 'index'])->name('users.index');
+    Route::get('/users/create', [UserController::class, 'create'])->name('users.create');
+    Route::post('/users', [UserController::class, 'store'])->name('users.store');
+    Route::get('/users/{id}', [UserController::class, 'show'])->name('users.show');
+    Route::get('/users/{id}/edit', [UserController::class, 'edit'])->name('users.edit');
+    Route::put('/users/{id}', [UserController::class, 'update'])->name('users.update');
+    Route::delete('/users/{id}', [UserController::class, 'destroy'])->name('users.destroy');
+    Route::post('/users/{id}/toggle-status', [UserController::class, 'toggleStatus'])->name('users.toggle-status');
+    Route::post('/users/{id}/reset-password', [UserController::class, 'resetPassword'])->name('users.reset-password');
 
     // ==================== POS SYSTEM ====================
     Route::get('/pos', [PosController::class, 'index'])->name('pos.index');
@@ -176,10 +193,11 @@ Route::middleware(['auth', 'verified', 'role:resto,cashier,resto_admin,admin'])-
     Route::post('/orders/{order}/complete', [PosController::class, 'complete'])->name('cashier.orders.complete');
     Route::post('/orders/{order}/cancel', [PosController::class, 'cancel'])->name('cashier.orders.cancel');
     
-    Route::get('/pos/menu-updates', [PosController::class, 'getMenuUpdates'])->name('cashier.pos.menu-updates');
-    Route::get('/pos/order-updates', [PosController::class, 'getOrderUpdates'])->name('cashier.pos.order-updates');
-    Route::get('/pos/menu-data', [PosController::class, 'getMenuData'])->name('cashier.pos.menu-data');
-    Route::get('/pos/order-data', [PosController::class, 'getOrderData'])->name('cashier.pos.order-data');
+    // POS Real-time routes
+    Route::get('/pos/menu-updates', [PosController::class, 'getMenuUpdates'])->name('pos.menu-updates');
+    Route::get('/pos/order-updates', [PosController::class, 'getOrderUpdates'])->name('pos.order-updates');
+    Route::get('/pos/menu-data', [PosController::class, 'getMenuData'])->name('pos.menu-data');
+    Route::get('/pos/order-data', [PosController::class, 'getOrderData'])->name('pos.order-data');
 });
 
 // ==================== KITCHEN ROUTES ====================

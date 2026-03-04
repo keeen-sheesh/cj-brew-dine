@@ -28,18 +28,21 @@ class KitchenController extends Controller
             ->orderBy('created_at', 'asc')
             ->get()
             ->map(function($order) {
-                // Get only kitchen items
+                // Get only kitchen items with size information
                 $kitchenItems = [];
                 foreach ($order->saleItems as $item) {
                     if ($this->isKitchenSaleItem($item)) {
                         $kitchenItems[] = [
                             'id' => $item->id,
-                            'name' => $item->item->name,
+                            'name' => $itemName,
+                            'original_name' => $item->item->name,
                             'quantity' => $item->quantity,
                             'kitchen_status' => $item->kitchen_status ?? 'pending',
                             'started_at' => $item->kitchen_started_at,
                             'completed_at' => $item->kitchen_completed_at,
                             'notes' => $item->special_instructions,
+                            'size_id' => $item->size_id,
+                            'size_name' => $item->size ? ($item->size->display_name ?? $item->size->name) : null,
                         ];
                     }
                 }
@@ -480,10 +483,13 @@ class KitchenController extends Controller
                     if ($this->isKitchenSaleItem($item)) {
                         $kitchenItems[] = [
                             'id' => $item->id,
-                            'name' => $item->item->name,
+                            'name' => $itemName,
+                            'original_name' => $item->item->name,
                             'quantity' => $item->quantity,
                             'kitchen_status' => $item->kitchen_status ?? 'pending',
                             'notes' => $item->special_instructions,
+                            'size_id' => $item->size_id,
+                            'size_name' => $item->size ? ($item->size->display_name ?? $item->size->name) : null,
                         ];
                     }
                 }

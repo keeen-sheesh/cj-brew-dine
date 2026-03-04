@@ -22,7 +22,7 @@ class FoodItemController extends Controller
      */
     public function index(Request $request)
     {
-        $query = Item::with('category')
+        $query = Item::with(['category', 'itemSizes.size'])
             ->orderBy('sort_order', 'asc')
             ->orderBy('created_at', 'desc');
 
@@ -520,23 +520,40 @@ class FoodItemController extends Controller
      */
     public function getForPos(Request $request)
     {
-        $items = Item::with('category')
+        $items = Item::with(['category', 'itemSizes.size'])
             ->where('is_available', true)
             ->orderBy('sort_order', 'asc')
             ->orderBy('name', 'asc')
             ->get()
             ->map(function($item) {
+                // Format sizes
+                $sizes = $item->itemSizes->map(function($itemSize) {
+                    return [
+                        'id' => $itemSize->id,
+                        'size_id' => $itemSize->size_id,
+                        'size_name' => $itemSize->size->name,
+                        'display_name' => $itemSize->size->display_name,
+                        'price' => (float) $itemSize->price,
+                    ];
+                });
+
                 return [
                     'id' => $item->id,
                     'name' => $item->name,
                     'description' => $item->description,
                     'price' => (float)$item->price,
+                    'price_solo' => (float)$item->price_solo,
+                    'price_whole' => (float)$item->price_whole,
+                    'pricing_type' => $item->pricing_type,
                     'category_id' => $item->category_id,
                     'category_name' => $item->category->name ?? '',
                     'is_available' => (bool)$item->is_available,
                     'stock_quantity' => (int)$item->stock_quantity,
                     'low_stock_threshold' => (int)$item->low_stock_threshold,
                     'image' => $item->image,
+                    'has_sizes' => $sizes->count() > 0,
+                    'sizes' => $sizes,
+                    'display_price' => $item->display_price,
                 ];
             });
 
@@ -544,6 +561,53 @@ class FoodItemController extends Controller
             'success' => true,
             'items' => $items,
             'timestamp' => now()->toDateTimeString(),
+        ]);
+    }
+
+    /**
+     * Get items with sizes for Foods.jsx (batch loading)
+     */
+    public function getItemsWithSizes()
+    {
+        $items = Item::with(['category', 'itemSizes.size'])
+            ->orderBy('sort_order', 'asc')
+            ->orderBy('name', 'asc')
+            ->get()
+            ->map(function($item) {
+                $sizes = $item->itemSizes->map(function($itemSize) {
+                    return [
+                        'id' => $itemSize->id,
+                        'size_id' => $itemSize->size_id,
+                        'size_name' => $itemSize->size->name,
+                        'display_name' => $itemSize->size->display_name,
+                        'price' => (float) $itemSize->price,
+                    ];
+                });
+
+                return [
+                    'id' => $item->id,
+                    'name' => $item->name,
+                    'description' => $item->description,
+                    'price' => (float)$item->price,
+                    'price_solo' => (float)$item->price_solo,
+                    'price_whole' => (float)$item->price_whole,
+                    'pricing_type' => $item->pricing_type,
+                    'category_id' => $item->category_id,
+                    'category_name' => $item->category->name ?? '',
+                    'is_available' => (bool)$item->is_available,
+                    'is_featured' => (bool)$item->is_featured,
+                    'stock_quantity' => (int)$item->stock_quantity,
+                    'low_stock_threshold' => (int)$item->low_stock_threshold,
+                    'sort_order' => (int)$item->sort_order,
+                    'image' => $item->image,
+                    'has_sizes' => $sizes->count() > 0,
+                    'sizes' => $sizes,
+                ];
+            });
+
+        return response()->json([
+            'success' => true,
+            'items' => $items,
         ]);
     }
 

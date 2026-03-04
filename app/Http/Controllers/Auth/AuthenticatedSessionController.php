@@ -70,11 +70,9 @@ class AuthenticatedSessionController extends Controller
         }
         
         if ($user->role === 'customer') {
-            \Log::info('Redirecting to menu');
             return redirect('/menu');
         }
         
-        \Log::warning('Unknown role, defaulting to admin dashboard', ['role' => $user->role]);
         return redirect()->route('admin.dashboard');
     }
 

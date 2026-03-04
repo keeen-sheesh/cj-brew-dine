@@ -19,6 +19,7 @@ class Category extends Model
 
     protected $casts = [
         'is_active' => 'boolean',
+        'is_kitchen_category' => 'boolean',
         'sort_order' => 'integer'
     ];
 
@@ -62,6 +63,12 @@ class Category extends Model
     public function scopeActive($query)
     {
         return $query->where('is_active', true);
+    }
+
+    // Scope for kitchen categories
+    public function scopeKitchen($query)
+    {
+        return $query->where('is_kitchen_category', true);
     }
 
     // Default order

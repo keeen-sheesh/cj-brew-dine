@@ -98,7 +98,17 @@ export default function AdminLayout({ children, auth }) {
     
     const handleLogout = (e) => {
         e.preventDefault();
-        router.post('/logout');
+        
+        try {
+            // Use axios directly to benefit from CSRF token refresh interceptor
+            await window.axios.post('/logout');
+            // Redirect to login page after successful logout
+            window.location.href = '/login';
+        } catch (error) {
+            console.error('Logout failed:', error);
+            // If still failing, force redirect to login
+            window.location.href = '/login';
+        }
     };
     
     return (

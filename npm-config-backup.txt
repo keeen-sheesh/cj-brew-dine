@@ -1,0 +1,15 @@
+; "builtin" config from C:\Program Files\nodejs\node_modules\npm\npmrc
+
+prefix = "C:\\Users\\SJA\\AppData\\Roaming\\npm"
+
+; "user" config from C:\Users\SJA\.npmrc
+
+script-shell = "C:\\Program Files\\nodejs\\cmd.exe"
+
+; node bin location = C:\Program Files\nodejs\node.exe
+; node version = v24.13.1
+; npm local prefix = C:\xampp\htdocs\cj-brew-dine
+; npm version = 11.8.0
+; cwd = C:\xampp\htdocs\cj-brew-dine
+; HOME = C:\Users\SJA
+; Run `npm config ls -l` to show all defaults.

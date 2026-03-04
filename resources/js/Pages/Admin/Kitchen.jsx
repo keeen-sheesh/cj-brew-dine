@@ -913,7 +913,7 @@ export default function Kitchen({ orders = [], hasNewOrder: initialHasNewOrder, 
   };
 
   return (
-    <AdminLayout>
+    <Wrapper>
       <Head title="Kitchen Display" />
       
       {notification && (
@@ -1471,6 +1471,6 @@ export default function Kitchen({ orders = [], hasNewOrder: initialHasNewOrder, 
           animation: slide-in 0.3s ease-out;
         }
       `}</style>
-    </AdminLayout>
+    </Wrapper>
   );
 }

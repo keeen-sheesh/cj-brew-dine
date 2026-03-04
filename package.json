@@ -1,10 +1,15 @@
 {
-    "$schema": "https://www.schemastore.org/package.json",
+    "$schema": "https://json.schemastore.org/package.json",
     "private": true,
     "type": "module",
     "scripts": {
+        "dev": "vite",
         "build": "vite build",
-        "dev": "vite"
+        "build:ssr": "vite build --ssr",
+        "build:client": "vite build --ssr false",
+        "preview": "vite preview",
+        "ssr:dev": "vite build --ssr && php artisan serve",
+        "lint": "eslint resources/js --ext .js,.jsx,.ts,.tsx"
     },
     "devDependencies": {
         "@headlessui/react": "^2.0.0",

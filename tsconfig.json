@@ -1,0 +1,41 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "jsx": "react-jsx",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "types": ["node", "vite/client"],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["resources/js/*"],
+      "@components/*": ["resources/js/Components/*"],
+      "@pages/*": ["resources/js/Pages/*"],
+      "@hooks/*": ["resources/js/hooks/*"],
+      "@utils/*": ["resources/js/utils/*"],
+      "@types/*": ["resources/js/types/*"],
+      "ziggy-js": ["./vendor/tightenco/ziggy"]
+    }
+  },
+  "include": ["resources/js/**/*.ts", "resources/js/**/*.tsx", "resources/js/**/*.jsx"],
+  "exclude": ["node_modules", "dist", "build"],
+  "vite": {
+    "ssr": {
+      "external": ["ziggy-js"]
+    }
+  }
+}

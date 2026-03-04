@@ -12,6 +12,7 @@ use App\Models\InventoryTransaction;
 use App\Models\PaymentMethod;
 use App\Models\Sale;
 use App\Models\SaleItem;
+use App\Models\Size;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Illuminate\Support\Facades\DB;
@@ -27,6 +28,25 @@ class PosController extends Controller
     {
         $categories = $this->getPosCategories();
 
+        // Format items with their sizes
+        foreach ($categories as $category) {
+            foreach ($category->items as $item) {
+                $item->sizes = $item->itemSizes->map(function($itemSize) {
+                    return [
+                        'id' => $itemSize->id,
+                        'size_id' => $itemSize->size_id,
+                        'size_name' => $itemSize->size->name,
+                        'display_name' => $itemSize->size->display_name,
+                        'price' => (float) $itemSize->price,
+                    ];
+                });
+                $item->has_sizes = $item->sizes->count() > 0;
+                $item->pricing_type = $item->pricing_type ?? 'single';
+                $item->price_solo = $item->price_solo ? (float)$item->price_solo : null;
+                $item->price_whole = $item->price_whole ? (float)$item->price_whole : null;
+            }
+        }
+
         $paymentMethods = PaymentMethod::where('is_active', true)
             ->orderBy('name')
             ->get();
@@ -38,23 +58,40 @@ class PosController extends Controller
             ->get()
             ->map(function($order) {
                 $order->items_list = $order->saleItems->map(function($saleItem) {
-                    return $saleItem->item->name ?? 'Unknown Item';
+                    $itemName = $saleItem->item->name ?? 'Unknown Item';
+                    if ($saleItem->size_id) {
+                        $size = Size::find($saleItem->size_id);
+                        if ($size) {
+                            $itemName .= ' (' . ($size->display_name ?? $size->name) . ')';
+                        }
+                    }
+                    return $itemName;
                 })->implode(', ');
                 return $order;
             });
 
-        // Get pending/preparing orders (include kitchen status)
-        $pendingOrders = Sale::with(['customer', 'paymentMethod', 'saleItems.item.category'])
+        // Get pending/preparing orders (include kitchen status and discounts)
+        $pendingOrders = Sale::with(['customer', 'paymentMethod', 'saleItems.item.category', 'saleItems.size'])
             ->whereIn('status', ['pending', 'preparing', 'ready'])
             ->orderBy('created_at', 'desc')
             ->limit(20)
             ->get()
             ->map(function($order) {
-                $order->items_list = $order->saleItems->map(function($saleItem) {
-                    return $saleItem->item->name ?? 'Unknown Item';
+                // Build items list with proper size display
+                $itemsList = $order->saleItems->map(function($saleItem) {
+                    $itemName = $saleItem->item->name ?? 'Unknown Item';
+                    
+                    // IMPORTANT: Check if size exists and add to name
+                    if ($saleItem->size) {
+                        $sizeName = $saleItem->size->display_name ?? $saleItem->size->name;
+                        $itemName .= ' (' . $sizeName . ')';
+                    }
+                    
+                    // Add quantity
+                    $itemName = $saleItem->quantity . 'x ' . $itemName;
+                    
+                    return $itemName;
                 })->implode(', ');
-                $order->formatted_total = '₱' . number_format($order->total_amount, 2);
-                $order->formatted_time = $order->created_at->format('h:i A');
                 
                 // check against the database instead of looping manually; this
                 // avoids edge cases where the category relation might be null or
@@ -65,6 +102,26 @@ class PosController extends Controller
                 $order->kitchen_status = $order->kitchen_status;
                 $order->payment_method_name = $order->paymentMethod ? $order->paymentMethod->name : null;
                 $order->room_number = $order->room_number ?? null;
+                $order->is_hotel = $isHotel;
+                $order->service_charge = $order->service_charge ?? 0;
+                
+                // Add discount information
+                $order->discount_type = $order->discount_type ?? 'none';
+                $order->discount_value = $order->discount_value ?? 0;
+                $order->cards_presented = $order->cards_presented ?? 0;
+                $order->people_count = $order->people_count ?? 1;
+                
+                // Calculate estimated savings for display
+                $savings = [];
+                if ($order->cards_presented > 0) {
+                    $savings[] = $order->cards_presented . ' Card(s)';
+                }
+                if ($order->discount_type !== 'none' && $order->discount_value > 0) {
+                    $savings[] = $order->discount_type === 'percentage' 
+                        ? $order->discount_value . '% off' 
+                        : '₱' . $order->discount_value . ' off';
+                }
+                $order->discount_display = !empty($savings) ? implode(' + ', $savings) : null;
                 
                 return $order;
             });
@@ -114,6 +171,25 @@ class PosController extends Controller
 
         $categories = $this->getPosCategories();
 
+        // Format items with their sizes
+        foreach ($categories as $category) {
+            foreach ($category->items as $item) {
+                $item->sizes = $item->itemSizes->map(function($itemSize) {
+                    return [
+                        'id' => $itemSize->id,
+                        'size_id' => $itemSize->size_id,
+                        'size_name' => $itemSize->size->name,
+                        'display_name' => $itemSize->size->display_name,
+                        'price' => (float) $itemSize->price,
+                    ];
+                });
+                $item->has_sizes = $item->sizes->count() > 0;
+                $item->pricing_type = $item->pricing_type ?? 'single';
+                $item->price_solo = $item->price_solo ? (float)$item->price_solo : null;
+                $item->price_whole = $item->price_whole ? (float)$item->price_whole : null;
+            }
+        }
+
         return response()->json([
             'success' => true,
             'updated' => true,
@@ -123,10 +199,10 @@ class PosController extends Controller
         ]);
     }
 
-    // 🔥 REAL-TIME: Get order updates (3-second polling)
+    // 🔥 REAL-TIME: Get order updates (3-second polling) - FIXED for size items and boolean kitchen check
     public function getOrderUpdates(Request $request)
     {
-        $orders = Sale::with(['customer', 'paymentMethod', 'saleItems.item.category'])
+        $orders = Sale::with(['customer', 'paymentMethod', 'saleItems.item.category', 'saleItems.size'])
             ->whereIn('status', ['pending', 'preparing', 'ready'])
             ->orderBy('created_at', 'desc')
             ->limit(20)
@@ -135,8 +211,20 @@ class PosController extends Controller
         $pendingOrders = [];
         
         foreach ($orders as $order) {
+            // Build items list with proper size display and quantities
             $itemsList = $order->saleItems->map(function($saleItem) {
-                return $saleItem->item->name ?? 'Unknown Item';
+                $itemName = $saleItem->item->name ?? 'Unknown Item';
+                
+                // IMPORTANT: Check if size exists and add to name
+                if ($saleItem->size) {
+                    $sizeName = $saleItem->size->display_name ?? $saleItem->size->name;
+                    $itemName .= ' (' . $sizeName . ')';
+                }
+                
+                // Add quantity
+                $itemName = $saleItem->quantity . 'x ' . $itemName;
+                
+                return $itemName;
             })->implode(', ');
             
             // Check if order has kitchen items using DB query
@@ -145,19 +233,47 @@ class PosController extends Controller
             // Get payment method name
             $paymentMethodName = $order->paymentMethod ? $order->paymentMethod->name : null;
             
+            // Check if hotel order
+            $isHotel = $paymentMethodName === 'Hotel';
+            
+            // Calculate discount display
+            $savings = [];
+            if ($order->cards_presented > 0) {
+                $savings[] = $order->cards_presented . ' Card(s)';
+            }
+            if ($order->discount_type !== 'none' && $order->discount_value > 0) {
+                $savings[] = $order->discount_type === 'percentage' 
+                    ? $order->discount_value . '% off' 
+                    : '₱' . $order->discount_value . ' off';
+            }
+            $discountDisplay = !empty($savings) ? implode(' + ', $savings) : null;
+            
             $pendingOrders[] = [
                 'id' => $order->id,
-                'total_amount' => $order->total_amount,
+                'total_amount' => (float) $order->total_amount,
+                'subtotal' => (float) ($order->subtotal ?? 0),
+                'discount_amount' => (float) ($order->discount_amount ?? 0),
+                'service_charge' => (float) ($order->service_charge ?? 0),
                 'status' => $order->status,
                 'kitchen_status' => $order->kitchen_status,
                 'has_kitchen_items' => $hasKitchenItems,
-                'created_at' => $order->created_at,
+                'created_at' => $order->created_at->toISOString(),
                 'customer_name' => $order->customer_name,
                 'payment_method_name' => $paymentMethodName,
                 'room_number' => $order->room_number ?? null,
                 'items_list' => $itemsList,
                 'formatted_total' => '₱' . number_format($order->total_amount, 2),
+                'formatted_subtotal' => '₱' . number_format($order->subtotal ?? 0, 2),
+                'formatted_discount' => '₱' . number_format($order->discount_amount ?? 0, 2),
+                'formatted_service_charge' => ($order->service_charge ?? 0) > 0 ? '₱' . number_format($order->service_charge, 2) : null,
                 'formatted_time' => $order->created_at->format('h:i A'),
+                'discount_type' => $order->discount_type ?? 'none',
+                'discount_value' => (float) ($order->discount_value ?? 0),
+                'cards_presented' => (int) ($order->cards_presented ?? 0),
+                'people_count' => (int) ($order->people_count ?? 1),
+                'discount_display' => $discountDisplay,
+                'is_hotel' => $isHotel,
+                'order_number' => 'ORD-' . str_pad($order->id, 6, '0', STR_PAD_LEFT),
             ];
         }
 
@@ -165,6 +281,7 @@ class PosController extends Controller
             'success' => true,
             'pending_orders' => $pendingOrders,
             'timestamp' => now()->toDateTimeString(),
+            'count' => count($pendingOrders),
         ]);
     }
 
@@ -408,10 +525,10 @@ class PosController extends Controller
         return implode("\n", $lines);
     }
 
-    // 🔥 REAL-TIME: Full order data for manual refresh
+    // 🔥 REAL-TIME: Full order data for manual refresh - FIXED for size items and boolean kitchen check
     public function getOrderData(Request $request)
     {
-        $orders = Sale::with(['customer', 'paymentMethod', 'saleItems.item.category'])
+        $orders = Sale::with(['customer', 'paymentMethod', 'saleItems.item.category', 'saleItems.size'])
             ->whereIn('status', ['pending', 'preparing', 'ready'])
             ->orderBy('created_at', 'desc')
             ->limit(20)
@@ -420,8 +537,20 @@ class PosController extends Controller
         $pendingOrders = [];
         
         foreach ($orders as $order) {
+            // Build items list with proper size display and quantities
             $itemsList = $order->saleItems->map(function($saleItem) {
-                return $saleItem->item->name ?? 'Unknown Item';
+                $itemName = $saleItem->item->name ?? 'Unknown Item';
+                
+                // IMPORTANT: Check if size exists and add to name
+                if ($saleItem->size) {
+                    $sizeName = $saleItem->size->display_name ?? $saleItem->size->name;
+                    $itemName .= ' (' . $sizeName . ')';
+                }
+                
+                // Add quantity
+                $itemName = $saleItem->quantity . 'x ' . $itemName;
+                
+                return $itemName;
             })->implode(', ');
             
             // Check if order has kitchen items using a dedicated query
@@ -430,25 +559,54 @@ class PosController extends Controller
             // Get payment method name
             $paymentMethodName = $order->paymentMethod ? $order->paymentMethod->name : null;
             
+            // Check if hotel order
+            $isHotel = $paymentMethodName === 'Hotel';
+            
+            // Calculate discount display
+            $savings = [];
+            if ($order->cards_presented > 0) {
+                $savings[] = $order->cards_presented . ' Card(s)';
+            }
+            if ($order->discount_type !== 'none' && $order->discount_value > 0) {
+                $savings[] = $order->discount_type === 'percentage' 
+                    ? $order->discount_value . '% off' 
+                    : '₱' . $order->discount_value . ' off';
+            }
+            $discountDisplay = !empty($savings) ? implode(' + ', $savings) : null;
+            
             $pendingOrders[] = [
                 'id' => $order->id,
-                'total_amount' => $order->total_amount,
+                'total_amount' => (float) $order->total_amount,
+                'subtotal' => (float) ($order->subtotal ?? 0),
+                'discount_amount' => (float) ($order->discount_amount ?? 0),
+                'service_charge' => (float) ($order->service_charge ?? 0),
                 'status' => $order->status,
                 'kitchen_status' => $order->kitchen_status,
                 'has_kitchen_items' => $hasKitchenItems,
-                'created_at' => $order->created_at,
+                'created_at' => $order->created_at->toISOString(),
                 'customer_name' => $order->customer_name,
                 'payment_method_name' => $paymentMethodName,
                 'room_number' => $order->room_number ?? null,
                 'items_list' => $itemsList,
                 'formatted_total' => '₱' . number_format($order->total_amount, 2),
+                'formatted_subtotal' => '₱' . number_format($order->subtotal ?? 0, 2),
+                'formatted_discount' => '₱' . number_format($order->discount_amount ?? 0, 2),
+                'formatted_service_charge' => ($order->service_charge ?? 0) > 0 ? '₱' . number_format($order->service_charge, 2) : null,
                 'formatted_time' => $order->created_at->format('h:i A'),
+                'discount_type' => $order->discount_type ?? 'none',
+                'discount_value' => (float) ($order->discount_value ?? 0),
+                'cards_presented' => (int) ($order->cards_presented ?? 0),
+                'people_count' => (int) ($order->people_count ?? 1),
+                'discount_display' => $discountDisplay,
+                'is_hotel' => $isHotel,
+                'order_number' => 'ORD-' . str_pad($order->id, 6, '0', STR_PAD_LEFT),
             ];
         }
 
         return response()->json([
             'success' => true,
             'pending_orders' => $pendingOrders,
+            'count' => count($pendingOrders),
         ]);
     }
 
@@ -756,7 +914,6 @@ class PosController extends Controller
                 'payment_method_id' => $request->payment_method_id ?? 1,
             ];
             
-            // Only update paid_at if column exists
             if (Schema::hasColumn('sales', 'paid_at')) {
                 $updateData['paid_at'] = now();
             }
@@ -765,7 +922,6 @@ class PosController extends Controller
 
             DB::commit();
 
-            // Update menu last updated timestamp to trigger POS refresh
             cache()->put('menu_last_updated', time(), 3600);
 
             return redirect()->route('admin.pos.index')->with('success', '✅ Order #' . $sale->id . ' marked as paid successfully!');
@@ -853,16 +1009,18 @@ class PosController extends Controller
     }
 
     /**
-     * Kitchen marks order as ready
+     * Kitchen marks order as ready for pickup
+     * This makes it appear in POS as "ready" for completion
      */
     public function kitchenReady(Request $request, Sale $order)
     {
         try {
             DB::beginTransaction();
 
+            // Update the order status to 'ready' so POS can see it
             $order->update([
-                'status' => 'ready',
-                'kitchen_status' => 'ready',
+                'status' => 'ready',           // This makes it show in POS as ready for pickup
+                'kitchen_status' => 'ready',    // This tracks kitchen status
             ]);
 
             // Update all kitchen items to ready
@@ -871,6 +1029,7 @@ class PosController extends Controller
             foreach ($kitchenItems as $item) {
                 $item->update([
                     'kitchen_status' => 'ready',
+                    'kitchen_completed_at' => now(),
                 ]);
             }
 
@@ -879,9 +1038,11 @@ class PosController extends Controller
             // Update cache to trigger POS refresh
             cache()->put('menu_last_updated', time(), 3600);
 
+            Log::info('Kitchen marked order as ready for pickup', ['order_id' => $order->id]);
+
             return response()->json([
                 'success' => true,
-                'message' => 'Order #' . $order->id . ' is ready'
+                'message' => 'Order #' . $order->id . ' is ready for pickup'
             ]);
 
         } catch (\Exception $e) {
@@ -897,7 +1058,7 @@ class PosController extends Controller
     }
 
     /**
-     * Complete an order (mark as completed) - FIXED for database compatibility
+     * POS completes the order (after pickup)
      */
     public function complete(Request $request, Sale $order)
     {
