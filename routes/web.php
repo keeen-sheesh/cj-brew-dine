@@ -8,7 +8,13 @@ use App\Http\Controllers\Admin\PosController;
 use App\Http\Controllers\Admin\KitchenController;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\Session;
 use Inertia\Inertia;
+
+// CSRF Token endpoint for JavaScript refresh
+Route::get('/csrf-token', function () {
+    return response()->json(['token' => csrf_token()]);
+});
 
 // Public routes
 Route::get('/', function () {
@@ -16,9 +22,9 @@ Route::get('/', function () {
         $user = Auth::user();
         $roleRedirects = [
             'admin' => '/admin/dashboard',
-            'resto_admin' => '/cashier/pos',
-            'resto' => '/cashier/pos',
-            'kitchen' => '/admin/kitchen',
+            'resto_admin' => '/cashier',
+            'resto' => '/cashier',
+            'kitchen' => '/kitchen',
             'customer' => '/menu',
         ];
         return redirect($roleRedirects[$user->role] ?? '/admin/dashboard');
@@ -120,9 +126,28 @@ Route::middleware(['auth', 'verified', 'role:admin'])->prefix('admin')->name('ad
     Route::get('/roles', function () {
         return Inertia::render('Admin/Roles/Index');
     })->name('roles.index');
+    // ==================== INVENTORY ROUTES ====================
     Route::get('/inventory', function () {
-        return Inertia::render('Admin/Inventory/Index');
+        return Inertia::render('Admin/Inventory');
     })->name('inventory.index');
+    
+    Route::get('/inventory/management', function () {
+        return Inertia::render('Admin/InventoryManagement');
+    })->name('inventory.management');
+    
+    Route::get('/inventory/dashboard', function () {
+        return Inertia::render('Admin/InventoryDashboard');
+    })->name('inventory.dashboard');
+    
+    Route::get('/inventory/reports', function () {
+        return Inertia::render('Admin/StockReport');
+    })->name('inventory.reports');
+    
+    Route::get('/inventory/transactions', function () {
+        return Inertia::render('Admin/TransactionHistory');
+    })->name('inventory.transactions');
+
+    // ==================== SETTINGS ROUTES ====================
     Route::get('/settings', function () {
         return Inertia::render('Admin/Settings/Index');
     })->name('settings.index');
@@ -131,7 +156,7 @@ Route::middleware(['auth', 'verified', 'role:admin'])->prefix('admin')->name('ad
 // Cashier routes
 Route::middleware(['auth', 'verified', 'role:resto,admin'])->prefix('cashier')->group(function () {
     Route::get('/', function () {
-        return redirect('/cashier/pos');
+        return Inertia::render('Cashier/Dashboard');
     })->name('cashier.dashboard');
     
     Route::get('/pos', [PosController::class, 'index'])->name('cashier.pos');
@@ -147,11 +172,29 @@ Route::middleware(['auth', 'verified', 'role:resto,admin'])->prefix('cashier')->
     Route::get('/pos/order-data', [PosController::class, 'getOrderData'])->name('cashier.pos.order-data');
 });
 
-// Kitchen role redirects to admin/kitchen
+// Kitchen routes (for kitchen and admin roles)
 Route::middleware(['auth', 'verified', 'role:kitchen,admin'])->prefix('kitchen')->group(function () {
+    // Landing page
     Route::get('/', function () {
-        return redirect('/admin/kitchen');
-    });
+        return Inertia::render('Kitchen/Dashboard');
+    })->name('kitchen.dashboard');
+
+    // Kitchen board (same as admin kitchen index)
+    Route::get('/board', [KitchenController::class, 'index'])->name('kitchen.board');
+
+    // Polling and real-time
+    Route::get('/poll', [KitchenController::class, 'poll'])->name('kitchen.poll');
+    Route::get('/check-new', [KitchenController::class, 'checkNewOrders'])->name('kitchen.check-new');
+    Route::get('/test-alarm', [KitchenController::class, 'testAlarm'])->name('kitchen.test-alarm');
+    
+    // Order status updates
+    Route::put('/order/{sale}/status', [KitchenController::class, 'updateStatus'])->name('kitchen.update-status');
+    Route::put('/item/{saleItem}/status', [KitchenController::class, 'updateItemStatus'])->name('kitchen.update-item-status');
+    
+    // Kitchen actions
+    Route::post('/orders/{order}/start', [KitchenController::class, 'startPreparing'])->name('kitchen.start');
+    Route::post('/orders/{order}/ready', [KitchenController::class, 'markReady'])->name('kitchen.ready');
+    Route::post('/orders/{order}/complete', [KitchenController::class, 'markComplete'])->name('kitchen.complete');
 });
 
 // Customer routes

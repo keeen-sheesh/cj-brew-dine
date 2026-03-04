@@ -13,11 +13,13 @@ class Category extends Model
         'name',
         'description',
         'sort_order',
-        'is_active'
+        'is_active',
+        'is_kitchen_category'
     ];
 
     protected $casts = [
         'is_active' => 'boolean',
+        'is_kitchen_category' => 'boolean',
         'sort_order' => 'integer'
     ];
 

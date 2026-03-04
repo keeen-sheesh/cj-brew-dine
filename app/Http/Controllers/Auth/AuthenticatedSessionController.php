@@ -44,28 +44,22 @@ class AuthenticatedSessionController extends Controller
             'isKitchen' => $user->isKitchen(),
         ]);
         
-        // SIMPLE REDIRECT - Debug version
         if ($user->role === 'admin') {
-            \Log::info('Redirecting to admin dashboard');
             return redirect()->route('admin.dashboard');
         }
         
         if ($user->role === 'resto' || $user->role === 'resto_admin') {
-            \Log::info('Redirecting to cashier');
             return redirect('/cashier');
         }
         
         if ($user->role === 'kitchen') {
-            \Log::info('Redirecting to kitchen');
             return redirect('/kitchen');
         }
         
         if ($user->role === 'customer') {
-            \Log::info('Redirecting to menu');
             return redirect('/menu');
         }
         
-        \Log::warning('Unknown role, defaulting to admin dashboard', ['role' => $user->role]);
         return redirect()->route('admin.dashboard');
     }
 

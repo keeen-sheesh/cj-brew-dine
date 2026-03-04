@@ -64,6 +64,12 @@ class Item extends Model
         return $this->hasMany(ItemSize::class);
     }
 
+    // Relationship with inventory transactions
+    public function inventoryTransactions()
+    {
+        return $this->hasMany(InventoryTransaction::class);
+    }
+
     // Scope for available items
     public function scopeAvailable($query)
     {

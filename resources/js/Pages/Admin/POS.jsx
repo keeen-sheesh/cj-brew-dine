@@ -1188,7 +1188,11 @@ export default function POS({
                 <div className="bg-white border-b border-gray-200 px-6 py-3 flex-shrink-0">
                     <div className="flex items-center justify-between">
                         <div className="flex items-center gap-4">
-                            <button onClick={() => router.visit('/admin/dashboard')} className="p-2 hover:bg-gray-100 rounded-lg">
+                            <button onClick={() => {
+                                const path = typeof window !== 'undefined' ? window.location.pathname : '';
+                                const back = path.startsWith('/cashier') ? '/cashier' : '/admin/dashboard';
+                                router.visit(back);
+                            }} className="p-2 hover:bg-gray-100 rounded-lg">
                                 <ArrowLeft className="w-5 h-5 text-gray-600" />
                             </button>
                             <div>
@@ -1212,6 +1216,18 @@ export default function POS({
                                 <Clock className="w-4 h-4" />
                                 <span>Pending ({filteredPendingOrders.length})</span>
                                 {showPendingOrders ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+                            </button>
+                            <button
+                                onClick={() => (window.location.href = '/logout')}
+                                className="p-2 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                                title="Logout"
+                            >
+                                {/* Re-using an existing icon color palette, small and unobtrusive */}
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
+                                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                                    <polyline points="16 17 21 12 16 7"/>
+                                    <line x1="21" y1="12" x2="9" y2="12"/>
+                                </svg>
                             </button>
                         </div>
                     </div>
