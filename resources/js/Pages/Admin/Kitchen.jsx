@@ -43,13 +43,19 @@ import {
   CalendarX,
   CalendarClock,
   ListFilter,
-  ChevronsUpDown
+  ChevronsUpDown,
+  LogOut
 } from 'lucide-react';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 import { format, subDays, startOfWeek, endOfWeek, startOfMonth, endOfMonth, isToday, isSameDay } from 'date-fns';
 
 export default function Kitchen({ orders = [], hasNewOrder: initialHasNewOrder }) {
+  const BASE_PATH = typeof window !== 'undefined' && window.location?.pathname?.startsWith('/admin/kitchen')
+    ? '/admin/kitchen'
+    : '/kitchen';
+  const IS_ADMIN_WRAPPER = typeof window !== 'undefined' && window.location?.pathname?.startsWith('/admin/kitchen');
+  const Wrapper = ({ children }) => IS_ADMIN_WRAPPER ? <AdminLayout>{children}</AdminLayout> : <>{children}</>;
   const [activeTab, setActiveTab] = useState('pending');
   const [notification, setNotification] = useState(null);
   const [soundEnabled, setSoundEnabled] = useState(true);
@@ -250,7 +256,7 @@ export default function Kitchen({ orders = [], hasNewOrder: initialHasNewOrder }
     
     try {
       const formattedDate = selectedDate.toISOString().split('T')[0];
-      const response = await fetch(`/admin/kitchen/check-new?date=${formattedDate}&since=${Date.now()}`, {
+      const response = await fetch(`${BASE_PATH}/check-new?date=${formattedDate}&since=${Date.now()}`, {
         method: 'GET',
         headers: {
           'Accept': 'application/json',
@@ -372,7 +378,7 @@ export default function Kitchen({ orders = [], hasNewOrder: initialHasNewOrder }
     setProcessingOrder(orderId);
     
     try {
-      const response = await fetch(`/admin/kitchen/orders/${orderId}/start`, {
+      const response = await fetch(`${BASE_PATH}/orders/${orderId}/start`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -403,7 +409,7 @@ export default function Kitchen({ orders = [], hasNewOrder: initialHasNewOrder }
     setProcessingOrder(orderId);
     
     try {
-      const response = await fetch(`/admin/kitchen/orders/${orderId}/ready`, {
+      const response = await fetch(`${BASE_PATH}/orders/${orderId}/ready`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -733,7 +739,7 @@ export default function Kitchen({ orders = [], hasNewOrder: initialHasNewOrder }
   };
 
   return (
-    <AdminLayout>
+    <Wrapper>
       <Head title="Kitchen Display" />
       
       {notification && (
@@ -801,6 +807,16 @@ export default function Kitchen({ orders = [], hasNewOrder: initialHasNewOrder }
                     <span className="text-xs font-medium">{completedOrders.length}</span>
                   </div>
                 </div>
+
+                {!IS_ADMIN_WRAPPER && (
+                  <button
+                    onClick={() => (window.location.href = '/logout')}
+                    className="p-2 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                    title="Logout"
+                  >
+                    <LogOut className="w-4 h-4" />
+                  </button>
+                )}
               </div>
             </div>
 
@@ -1330,6 +1346,6 @@ export default function Kitchen({ orders = [], hasNewOrder: initialHasNewOrder }
           animation: slide-in 0.3s ease-out;
         }
       `}</style>
-    </AdminLayout>
+    </Wrapper>
   );
 }
