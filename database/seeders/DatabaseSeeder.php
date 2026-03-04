@@ -79,17 +79,17 @@ class DatabaseSeeder extends Seeder
             ['name' => 'Venti', 'display_name' => 'Venti (20oz)', 'sort_order' => 3],
             
             // Soda sizes
-            ['name' => 'Regular', 'display_name' => 'Regular', 'sort_order' => 1],
-            ['name' => 'Large', 'display_name' => 'Large', 'sort_order' => 2],
+            ['name' => 'Regular', 'display_name' => 'Regular', 'sort_order' => 4],
+            ['name' => 'Large', 'display_name' => 'Large', 'sort_order' => 5],
             
-            // Food sizes
-            ['name' => 'Solo', 'display_name' => 'Solo (1-3 persons)', 'sort_order' => 1],
-            ['name' => 'Whole', 'display_name' => 'Whole (3-6 persons)', 'sort_order' => 2],
+            // Food sizes - Solo/Whole for main dishes
+            ['name' => 'Solo', 'display_name' => 'Solo (1-3 persons)', 'sort_order' => 6],
+            ['name' => 'Whole', 'display_name' => 'Whole (4-6 persons)', 'sort_order' => 7],
             
             // Set meal sizes
-            ['name' => '4-6 persons', 'display_name' => '4-6 persons', 'sort_order' => 1],
-            ['name' => '6-8 persons', 'display_name' => '6-8 persons', 'sort_order' => 2],
-            ['name' => '8-10 persons', 'display_name' => '8-10 persons', 'sort_order' => 3],
+            ['name' => '4-6 persons', 'display_name' => '4-6 persons', 'sort_order' => 8],
+            ['name' => '6-8 persons', 'display_name' => '6-8 persons', 'sort_order' => 9],
+            ['name' => '8-10 persons', 'display_name' => '8-10 persons', 'sort_order' => 10],
         ];
         
         foreach ($sizes as $sizeData) {
@@ -209,24 +209,7 @@ class DatabaseSeeder extends Seeder
             ]);
         };
 
-        // ========== HELPER FUNCTION FOR DUAL PRICE ITEMS (Solo/Whole) ==========
-        $createDualPriceItem = function($name, $description, $categoryId, $priceSolo, $priceWhole, $stockQuantity = 20, $lowStockThreshold = 5) {
-            return Item::create([
-                'name' => $name,
-                'description' => $description,
-                'category_id' => $categoryId,
-                'is_available' => true,
-                'has_sizes' => false,
-                'price' => $priceSolo,
-                'price_solo' => $priceSolo,
-                'price_whole' => $priceWhole,
-                'stock_quantity' => $stockQuantity,
-                'low_stock_threshold' => $lowStockThreshold,
-                'pricing_type' => 'dual',
-            ]);
-        };
-
-        // ========== COFFEE BASED - UPDATED WITH CORRECT PRICES FROM PDF ==========
+        // ========== COFFEE BASED ==========
         $coffeeItems = [
             [
                 'name' => 'Americano',
@@ -357,7 +340,7 @@ class DatabaseSeeder extends Seeder
             );
         }
 
-        // ========== MILK BASED - UPDATED WITH CORRECT PRICES FROM YOUR TABLE ==========
+        // ========== MILK BASED ==========
         $milkItems = [
             [
                 'name' => 'White Mocha',
@@ -452,7 +435,7 @@ class DatabaseSeeder extends Seeder
             );
         }
 
-        // ========== FRAPPE - KEEP EXISTING ==========
+        // ========== FRAPPE ==========
         $frappeItems = [
             [
                 'name' => 'Strawberry Cream',
@@ -725,53 +708,64 @@ class DatabaseSeeder extends Seeder
             );
         }
 
-        // ========== PASTA (Dual Price - Solo/Whole) ==========
+        // ========== PASTA (Now using sizes like coffee) ==========
         $pastaItems = [
             [
                 'name' => 'Chicken Pesto Pasta',
                 'description' => 'Round pasta with pesto paste, cream and chicken toppings',
-                'price_solo' => 390,
-                'price_whole' => 790,
+                'sizes' => [
+                    ['size_id' => $sizeSolo->id, 'price' => 390],
+                    ['size_id' => $sizeWhole->id, 'price' => 790],
+                ]
             ],
             [
                 'name' => 'Seafood Special Pancit Canton',
                 'description' => 'Canton served with thick sauce, shrimp, squid, fish fillet, vegetables, egg white, and sesame oil',
-                'price_solo' => 390,
-                'price_whole' => 790,
+                'sizes' => [
+                    ['size_id' => $sizeSolo->id, 'price' => 390],
+                    ['size_id' => $sizeWhole->id, 'price' => 790],
+                ]
             ],
             [
                 'name' => 'Crabpot Pasta',
                 'description' => 'Round pasta served with creamy sauce, crab, and paste sauce. Shrimp toppings and bread',
-                'price_solo' => 390,
-                'price_whole' => 790,
+                'sizes' => [
+                    ['size_id' => $sizeSolo->id, 'price' => 390],
+                    ['size_id' => $sizeWhole->id, 'price' => 790],
+                ]
             ],
             [
                 'name' => 'Chicken Truffle Pesto Pasta',
                 'description' => 'Flat pasta with pesto paste, creamy sauce, truffle oil, and mushroom with grilled chicken and cheese parmesan on top',
-                'price_solo' => 449,
-                'price_whole' => 890,
+                'sizes' => [
+                    ['size_id' => $sizeSolo->id, 'price' => 449],
+                    ['size_id' => $sizeWhole->id, 'price' => 890],
+                ]
             ],
             [
                 'name' => 'Spicy Chicken Alfredo Pasta',
                 'description' => 'Flat pasta with creamy sauce, mushroom, parsley, chili flakes, parmesan cheese, chicken toppings and sliced bread',
-                'price_solo' => 449,
-                'price_whole' => 890,
+                'sizes' => [
+                    ['size_id' => $sizeSolo->id, 'price' => 449],
+                    ['size_id' => $sizeWhole->id, 'price' => 890],
+                ]
             ],
             [
                 'name' => 'Beef Bolognese',
                 'description' => 'Round pasta with beef bolognese sauce, parmesan cheese and sliced bread',
-                'price_solo' => 449,
-                'price_whole' => 890,
+                'sizes' => [
+                    ['size_id' => $sizeSolo->id, 'price' => 449],
+                    ['size_id' => $sizeWhole->id, 'price' => 890],
+                ]
             ],
         ];
         
         foreach ($pastaItems as $item) {
-            $createDualPriceItem(
+            $createItemWithSizes(
                 $item['name'],
                 $item['description'],
                 $pastaCategory->id,
-                $item['price_solo'],
-                $item['price_whole'],
+                $item['sizes'],
                 20,
                 5
             );
@@ -814,69 +808,64 @@ class DatabaseSeeder extends Seeder
             );
         }
 
-        // ========== PORK (Mixed - Some Dual, Some Single) ==========
+        // ========== PORK (Now using sizes like coffee) ==========
         $porkItems = [
             [
                 'name' => 'Salt & Pepper Ribs',
                 'description' => 'Fried pork ribs, salt & pepper, vegetable with vinegar dip',
-                'type' => 'dual',
-                'price_solo' => 380,
-                'price_whole' => 780,
+                'sizes' => [
+                    ['size_id' => $sizeSolo->id, 'price' => 380],
+                    ['size_id' => $sizeWhole->id, 'price' => 780],
+                ]
             ],
             [
                 'name' => 'Baby Back Ribs',
                 'description' => 'Pork back ribs, marble potato, fries and back ribs sauce',
-                'type' => 'dual',
-                'price_solo' => 390,
-                'price_whole' => 790,
+                'sizes' => [
+                    ['size_id' => $sizeSolo->id, 'price' => 390],
+                    ['size_id' => $sizeWhole->id, 'price' => 790],
+                ]
             ],
             [
                 'name' => 'Sisig',
                 'description' => 'Crispy pork with onion and mayonnaise',
-                'type' => 'dual',
-                'price_solo' => 390,
-                'price_whole' => 790,
+                'sizes' => [
+                    ['size_id' => $sizeSolo->id, 'price' => 390],
+                    ['size_id' => $sizeWhole->id, 'price' => 790],
+                ]
             ],
             [
                 'name' => 'Crispy Pork Binagoongan',
                 'description' => 'Peanut sauce, coconut milk, pork bagnet, eggplant, petchay and sitaw with alamang',
-                'type' => 'dual',
-                'price_solo' => 390,
-                'price_whole' => 790,
+                'sizes' => [
+                    ['size_id' => $sizeSolo->id, 'price' => 390],
+                    ['size_id' => $sizeWhole->id, 'price' => 790],
+                ]
             ],
             [
                 'name' => 'Crispy German Pork Knuckle',
                 'description' => 'Pork knuckle with side dish fries, sweet corn and vegetables',
-                'type' => 'dual',
-                'price_solo' => 690,
-                'price_whole' => 1390,
+                'sizes' => [
+                    ['size_id' => $sizeSolo->id, 'price' => 690],
+                    ['size_id' => $sizeWhole->id, 'price' => 1390],
+                ]
             ],
             [
                 'name' => 'Pata Tim',
                 'description' => '1 serving pata, sweet soy sauce and vinegar',
-                'type' => 'single',
                 'price' => 849,
+                'single' => true
             ],
             [
                 'name' => 'Crispy Pata',
                 'description' => 'Deep-fried pork leg with crispy skin and tender meat with crispy pata sauce',
-                'type' => 'single',
                 'price' => 849,
+                'single' => true
             ],
         ];
         
         foreach ($porkItems as $item) {
-            if ($item['type'] === 'dual') {
-                $createDualPriceItem(
-                    $item['name'],
-                    $item['description'],
-                    $porkCategory->id,
-                    $item['price_solo'],
-                    $item['price_whole'],
-                    20,
-                    5
-                );
-            } else {
+            if (isset($item['single'])) {
                 $createSingleSizeItem(
                     $item['name'],
                     $item['description'],
@@ -885,66 +874,70 @@ class DatabaseSeeder extends Seeder
                     15,
                     4
                 );
+            } else {
+                $createItemWithSizes(
+                    $item['name'],
+                    $item['description'],
+                    $porkCategory->id,
+                    $item['sizes'],
+                    20,
+                    5
+                );
             }
         }
 
-        // ========== CHICKEN (Mixed - Some Dual, Some Single) ==========
+        // ========== CHICKEN (Now using sizes like coffee) ==========
         $chickenItems = [
             [
                 'name' => 'Chicken Rice Satay',
                 'description' => 'Marinated grilled chicken leg, fried rice with peanut sauce, and sunny side up egg',
-                'type' => 'dual',
-                'price_solo' => 280,
-                'price_whole' => 550,
+                'sizes' => [
+                    ['size_id' => $sizeSolo->id, 'price' => 280],
+                    ['size_id' => $sizeWhole->id, 'price' => 550],
+                ]
             ],
             [
                 'name' => 'Chicken Rice Inasal',
                 'description' => '1 1/2 cup fried rice, chicken leg, inasal, grilled, sunny side up egg',
-                'type' => 'dual',
-                'price_solo' => 280,
-                'price_whole' => 550,
+                'sizes' => [
+                    ['size_id' => $sizeSolo->id, 'price' => 280],
+                    ['size_id' => $sizeWhole->id, 'price' => 550],
+                ]
             ],
             [
                 'name' => 'Chicken Parmigiana',
                 'description' => '2 pcs chicken fillet, wrapped in breadcrumbs and napoli and white sauce with mozzarella cheese on top',
-                'type' => 'dual',
-                'price_solo' => 390,
-                'price_whole' => 790,
+                'sizes' => [
+                    ['size_id' => $sizeSolo->id, 'price' => 390],
+                    ['size_id' => $sizeWhole->id, 'price' => 790],
+                ]
             ],
             [
                 'name' => 'Buttered Chicken',
                 'description' => 'Deep fried chicken coated with butter and with garlic dip sauce',
-                'type' => 'dual',
-                'price_solo' => 449,
-                'price_whole' => 890,
+                'sizes' => [
+                    ['size_id' => $sizeSolo->id, 'price' => 449],
+                    ['size_id' => $sizeWhole->id, 'price' => 890],
+                ]
             ],
             [
                 'name' => 'Spicy Vietnamese Chicken',
                 'description' => '300g chicken, sautéed with red bell, green bell and leaks, anatto oil (spicy) with garlic mayo dip sauce',
-                'type' => 'dual',
-                'price_solo' => 449,
-                'price_whole' => 890,
+                'sizes' => [
+                    ['size_id' => $sizeSolo->id, 'price' => 449],
+                    ['size_id' => $sizeWhole->id, 'price' => 890],
+                ]
             ],
             [
                 'name' => 'Flavored Chicken Wings',
                 'description' => '6 pcs wings with Casa Jedliana sauce (Buffalo, Korean, Spicy Honey Garlic, Gangnam Sauce, Parmesan)',
-                'type' => 'single',
                 'price' => 449,
+                'single' => true
             ],
         ];
         
         foreach ($chickenItems as $item) {
-            if ($item['type'] === 'dual') {
-                $createDualPriceItem(
-                    $item['name'],
-                    $item['description'],
-                    $chickenCategory->id,
-                    $item['price_solo'],
-                    $item['price_whole'],
-                    20,
-                    5
-                );
-            } else {
+            if (isset($item['single'])) {
                 $createSingleSizeItem(
                     $item['name'],
                     $item['description'],
@@ -953,120 +946,155 @@ class DatabaseSeeder extends Seeder
                     15,
                     4
                 );
+            } else {
+                $createItemWithSizes(
+                    $item['name'],
+                    $item['description'],
+                    $chickenCategory->id,
+                    $item['sizes'],
+                    20,
+                    5
+                );
             }
         }
 
-        // ========== FISH & SEAFOODS (All Dual) ==========
+        // ========== FISH & SEAFOODS (Now using sizes like coffee) ==========
         $seafoodItems = [
             [
                 'name' => 'Grilled Tuna Belly',
                 'description' => 'Grilled tuna belly with vegetable side dish and gravy',
-                'price_solo' => 390,
-                'price_whole' => 790,
+                'sizes' => [
+                    ['size_id' => $sizeSolo->id, 'price' => 390],
+                    ['size_id' => $sizeWhole->id, 'price' => 790],
+                ]
             ],
             [
                 'name' => 'Fish Parmigiana',
                 'description' => 'Fried breaded fish fillet with napoli & cheese',
-                'price_solo' => 390,
-                'price_whole' => 790,
+                'sizes' => [
+                    ['size_id' => $sizeSolo->id, 'price' => 390],
+                    ['size_id' => $sizeWhole->id, 'price' => 790],
+                ]
             ],
             [
                 'name' => 'Sinigang na Salmon/Hipon',
                 'description' => 'Sour soup with vegetables, 300g Salmon head or 6-12 pcs shrimp',
-                'price_solo' => 390,
-                'price_whole' => 790,
+                'sizes' => [
+                    ['size_id' => $sizeSolo->id, 'price' => 390],
+                    ['size_id' => $sizeWhole->id, 'price' => 790],
+                ]
             ],
             [
                 'name' => 'Singaporean Chilichabs',
                 'description' => '500g crabs, spicy sauce, Singaporean style',
-                'price_solo' => 390,
-                'price_whole' => 790,
+                'sizes' => [
+                    ['size_id' => $sizeSolo->id, 'price' => 390],
+                    ['size_id' => $sizeWhole->id, 'price' => 790],
+                ]
             ],
             [
                 'name' => 'Garlic Shrimp',
                 'description' => '8 pcs shrimp with garlic butter',
-                'price_solo' => 449,
-                'price_whole' => 990,
+                'sizes' => [
+                    ['size_id' => $sizeSolo->id, 'price' => 449],
+                    ['size_id' => $sizeWhole->id, 'price' => 990],
+                ]
             ],
             [
                 'name' => 'Baked Salmon',
                 'description' => 'Norwegian salmon, creamy, cheesy on top with vegetable side dish',
-                'price_solo' => 490,
-                'price_whole' => 990,
+                'sizes' => [
+                    ['size_id' => $sizeSolo->id, 'price' => 490],
+                    ['size_id' => $sizeWhole->id, 'price' => 990],
+                ]
             ],
             [
                 'name' => 'Rosemary Baked Salmon',
                 'description' => 'Norwegian salmon, oven and rosemary, poached egg vegetables side dish and bearnaise sauce',
-                'price_solo' => 490,
-                'price_whole' => 990,
+                'sizes' => [
+                    ['size_id' => $sizeSolo->id, 'price' => 490],
+                    ['size_id' => $sizeWhole->id, 'price' => 990],
+                ]
             ],
             [
                 'name' => 'Seafood Cajun',
                 'description' => 'Mixed seafood (Crab, Shrimp, Tahong, Squid) corn and cajun spicy sauce',
-                'price_solo' => 649,
-                'price_whole' => 1290,
+                'sizes' => [
+                    ['size_id' => $sizeSolo->id, 'price' => 649],
+                    ['size_id' => $sizeWhole->id, 'price' => 1290],
+                ]
             ],
         ];
         
         foreach ($seafoodItems as $item) {
-            $createDualPriceItem(
+            $createItemWithSizes(
                 $item['name'],
                 $item['description'],
                 $seafoodCategory->id,
-                $item['price_solo'],
-                $item['price_whole'],
+                $item['sizes'],
                 15,
                 4
             );
         }
 
-        // ========== VEGETABLES (All Dual) ==========
+        // ========== VEGETABLES (Now using sizes like coffee) ==========
         $vegetableItems = [
             [
                 'name' => "Buddha's Delight",
                 'description' => 'Tofu, cauliflower, broccoli, 3 kinds of mushroom, dark soy sauce, sitcharo, black beans',
-                'price_solo' => 390,
-                'price_whole' => 790,
+                'sizes' => [
+                    ['size_id' => $sizeSolo->id, 'price' => 390],
+                    ['size_id' => $sizeWhole->id, 'price' => 790],
+                ]
             ],
             [
                 'name' => 'Creamy Baked Vegetable',
                 'description' => 'Bacon, ham, broccoli, cauliflower, young corn, black beans, sitcharo, cream and cheese',
-                'price_solo' => 390,
-                'price_whole' => 790,
+                'sizes' => [
+                    ['size_id' => $sizeSolo->id, 'price' => 390],
+                    ['size_id' => $sizeWhole->id, 'price' => 790],
+                ]
             ],
             [
                 'name' => 'Gising-Gising',
                 'description' => 'Vegetables with sweet spicy sauce, chopseuy, shrimp, tokwa, squid',
-                'price_solo' => 390,
-                'price_whole' => 790,
+                'sizes' => [
+                    ['size_id' => $sizeSolo->id, 'price' => 390],
+                    ['size_id' => $sizeWhole->id, 'price' => 790],
+                ]
             ],
             [
                 'name' => 'Kare-Kare (Crispy Pork Bagnet)',
                 'description' => 'Crispy pork bagnet with peanut sauce and vegetables',
-                'price_solo' => 449,
-                'price_whole' => 890,
+                'sizes' => [
+                    ['size_id' => $sizeSolo->id, 'price' => 449],
+                    ['size_id' => $sizeWhole->id, 'price' => 890],
+                ]
             ],
             [
                 'name' => 'Kare-Kare (Seafood)',
                 'description' => 'Seafood with peanut sauce and vegetables',
-                'price_solo' => 449,
-                'price_whole' => 890,
+                'sizes' => [
+                    ['size_id' => $sizeSolo->id, 'price' => 449],
+                    ['size_id' => $sizeWhole->id, 'price' => 890],
+                ]
             ],
             [
                 'name' => 'Chinese Style Chopseuy',
                 'description' => 'Vegetables with light sauce, oyster sauce, sesame oil, wine, fish fillet and shrimp',
-                'price_solo' => 449,
-                'price_whole' => 890,
+                'sizes' => [
+                    ['size_id' => $sizeSolo->id, 'price' => 449],
+                    ['size_id' => $sizeWhole->id, 'price' => 890],
+                ]
             ],
         ];
         
         foreach ($vegetableItems as $item) {
-            $createDualPriceItem(
+            $createItemWithSizes(
                 $item['name'],
                 $item['description'],
                 $vegetablesCategory->id,
-                $item['price_solo'],
-                $item['price_whole'],
+                $item['sizes'],
                 18,
                 5
             );
@@ -1092,31 +1120,37 @@ class DatabaseSeeder extends Seeder
             );
         }
 
-        // ========== SET MEALS ==========
+        // ========== SET MEALS (Using sizes for different servings) ==========
         $setItems = [
             [
                 'name' => 'SET A (4-6 persons)',
                 'description' => '2 Platter of Rice, Flavored Chicken Wings, Sinigang Salmon Head, Buddha\'s Delight, Sisig, 2 Iced Tea Pitcher',
-                'price' => 3420,
+                'sizes' => [
+                    ['size_id' => $size4_6->id, 'price' => 3420],
+                ]
             ],
             [
                 'name' => 'SET B (6-8 persons)',
                 'description' => '3 Platter of Rice, Baby Back Ribs, Buttered Chicken, Fish Parmigiana, Special Bulalo, Gising-Gising, 2 Iced Tea Pitcher',
-                'price' => 4370,
+                'sizes' => [
+                    ['size_id' => $size6_8->id, 'price' => 4370],
+                ]
             ],
             [
                 'name' => 'SET C (8-10 persons)',
                 'description' => '4 Platter of Rice, Flavored Chicken Wings, Crispy Pork Bagnet Kare-Kare, Seafood Cajun, Crispy Pata, Beef Salpicao, 2 Iced Tea Pitcher',
-                'price' => 5310,
+                'sizes' => [
+                    ['size_id' => $size8_10->id, 'price' => 5310],
+                ]
             ],
         ];
         
         foreach ($setItems as $item) {
-            $createSingleSizeItem(
+            $createItemWithSizes(
                 $item['name'],
                 $item['description'],
                 $setMealsCategory->id,
-                $item['price'],
+                $item['sizes'],
                 5,
                 1
             );

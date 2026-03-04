@@ -6,6 +6,7 @@ use App\Http\Controllers\Admin\FoodItemController;
 use App\Http\Controllers\Admin\ReportsController;
 use App\Http\Controllers\Admin\PosController;
 use App\Http\Controllers\Admin\KitchenController;
+use App\Http\Controllers\Admin\UserController;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
@@ -38,6 +39,17 @@ Route::middleware(['auth', 'verified', 'role:admin'])->prefix('admin')->name('ad
     Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
     Route::get('/transactions', [DashboardController::class, 'transactions'])->name('transactions');
     Route::get('/transactions/{id}', [DashboardController::class, 'getTransaction'])->name('transactions.show');
+
+    // ==================== USER MANAGEMENT ROUTES ====================
+    Route::get('/users', [UserController::class, 'index'])->name('users.index');
+    Route::get('/users/create', [UserController::class, 'create'])->name('users.create');
+    Route::post('/users', [UserController::class, 'store'])->name('users.store');
+    Route::get('/users/{id}', [UserController::class, 'show'])->name('users.show');
+    Route::get('/users/{id}/edit', [UserController::class, 'edit'])->name('users.edit');
+    Route::put('/users/{id}', [UserController::class, 'update'])->name('users.update');
+    Route::delete('/users/{id}', [UserController::class, 'destroy'])->name('users.destroy');
+    Route::post('/users/{id}/toggle-status', [UserController::class, 'toggleStatus'])->name('users.toggle-status');
+    Route::post('/users/{id}/reset-password', [UserController::class, 'resetPassword'])->name('users.reset-password');
 
     // ==================== POS SYSTEM ====================
     Route::get('/pos', [PosController::class, 'index'])->name('pos.index');
@@ -115,36 +127,89 @@ Route::middleware(['auth', 'verified', 'role:admin'])->prefix('admin')->name('ad
         return response()->json(['success' => true, 'sizes' => $sizes]);
     })->name('items.sizes');
 
-    // Other admin routes
+    // ==================== SIZES MANAGEMENT ====================
+    Route::get('/sizes', function() {
+        $sizes = App\Models\Size::orderBy('sort_order')->get();
+        return response()->json([
+            'success' => true,
+            'sizes' => $sizes
+        ]);
+    })->name('admin.sizes');
+
+    // ==================== BATCH ITEMS WITH SIZES (FAST LOADING) ====================
+    Route::get('/items-with-sizes', function() {
+        $items = App\Models\Item::with(['category', 'itemSizes.size'])->get();
+        
+        $formattedItems = $items->map(function($item) {
+            $sizes = $item->itemSizes->map(function($itemSize) {
+                return [
+                    'id' => $itemSize->id,
+                    'size_id' => $itemSize->size_id,
+                    'size_name' => $itemSize->size->name,
+                    'display_name' => $itemSize->size->display_name,
+                    'price' => (float) $itemSize->price,
+                ];
+            });
+
+            return [
+                'id' => $item->id,
+                'name' => $item->name,
+                'description' => $item->description,
+                'price' => (float)$item->price,
+                'category_id' => $item->category_id,
+                'category_name' => $item->category->name ?? '',
+                'is_available' => (bool)$item->is_available,
+                'is_featured' => (bool)$item->is_featured,
+                'stock_quantity' => (int)$item->stock_quantity,
+                'low_stock_threshold' => (int)$item->low_stock_threshold,
+                'sort_order' => (int)$item->sort_order,
+                'image' => $item->image,
+                'has_sizes' => (bool)$item->has_sizes,
+                'pricing_type' => $item->pricing_type ?? 'single',
+                'price_solo' => (float)$item->price_solo,
+                'price_whole' => (float)$item->price_whole,
+                'sizes' => $sizes
+            ];
+        });
+        
+        return response()->json([
+            'success' => true,
+            'items' => $formattedItems
+        ]);
+    })->name('items.batch');
+
+    // ==================== REPORTS ====================
     Route::get('/reports', [ReportsController::class, 'index'])->name('reports.index');
-    Route::get('/roles', function () {
-        return Inertia::render('Admin/Roles/Index');
-    })->name('roles.index');
+    
+    // ==================== INVENTORY ====================
     Route::get('/inventory', function () {
         return Inertia::render('Admin/Inventory/Index');
     })->name('inventory.index');
+    
+    // ==================== SETTINGS ====================
     Route::get('/settings', function () {
         return Inertia::render('Admin/Settings/Index');
     })->name('settings.index');
 });
 
 // Cashier routes
-Route::middleware(['auth', 'verified', 'role:resto,admin'])->prefix('cashier')->group(function () {
+Route::middleware(['auth', 'verified', 'role:resto,admin'])->prefix('cashier')->name('cashier.')->group(function () {
     Route::get('/', function () {
         return redirect('/cashier/pos');
-    })->name('cashier.dashboard');
+    })->name('dashboard');
     
-    Route::get('/pos', [PosController::class, 'index'])->name('cashier.pos');
-    Route::post('/pos/orders', [PosController::class, 'store'])->name('cashier.pos.orders.store');
-    Route::post('/orders/{order}/pay', [PosController::class, 'markAsPaid'])->name('cashier.orders.pay');
-    Route::post('/orders/{order}/ready', [PosController::class, 'markAsReady'])->name('cashier.orders.ready');
-    Route::post('/orders/{order}/preparing', [PosController::class, 'markAsPreparing'])->name('cashier.orders.preparing');
-    Route::post('/orders/{order}/complete', [PosController::class, 'complete'])->name('cashier.orders.complete');
+    Route::get('/pos', [PosController::class, 'index'])->name('pos');
+    Route::post('/pos/orders', [PosController::class, 'store'])->name('pos.orders.store');
+    Route::post('/orders/{order}/pay', [PosController::class, 'markAsPaid'])->name('orders.pay');
+    Route::post('/orders/{order}/ready', [PosController::class, 'markAsReady'])->name('orders.ready');
+    Route::post('/orders/{order}/preparing', [PosController::class, 'markAsPreparing'])->name('orders.preparing');
+    Route::post('/orders/{order}/complete', [PosController::class, 'complete'])->name('orders.complete');
     
-    Route::get('/pos/menu-updates', [PosController::class, 'getMenuUpdates'])->name('cashier.pos.menu-updates');
-    Route::get('/pos/order-updates', [PosController::class, 'getOrderUpdates'])->name('cashier.pos.order-updates');
-    Route::get('/pos/menu-data', [PosController::class, 'getMenuData'])->name('cashier.pos.menu-data');
-    Route::get('/pos/order-data', [PosController::class, 'getOrderData'])->name('cashier.pos.order-data');
+    // POS Real-time routes
+    Route::get('/pos/menu-updates', [PosController::class, 'getMenuUpdates'])->name('pos.menu-updates');
+    Route::get('/pos/order-updates', [PosController::class, 'getOrderUpdates'])->name('pos.order-updates');
+    Route::get('/pos/menu-data', [PosController::class, 'getMenuData'])->name('pos.menu-data');
+    Route::get('/pos/order-data', [PosController::class, 'getOrderData'])->name('pos.order-data');
 });
 
 // Kitchen role redirects to admin/kitchen
