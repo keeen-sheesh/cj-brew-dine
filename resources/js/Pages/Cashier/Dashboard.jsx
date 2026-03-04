@@ -1,147 +1,124 @@
-// resources/js/Pages/Cashier/Dashboard.jsx
 import React from 'react';
 import { Head } from '@inertiajs/react';
-import { ShoppingCart, Clock, DollarSign, Users } from 'lucide-react';
+import {
+    ChartBar,
+    CheckCircle2,
+    DollarSign,
+    ShoppingBasket,
+    TriangleAlert,
+    UtensilsCrossed,
+} from 'lucide-react';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/Components/ui/card';
+import AdminLayout from '@/Layouts/AdminLayout';
 
-export default function CashierDashboard() {
-    return (
-        <>
-            <Head title="Cashier Dashboard" />
-            
-            <div className="min-h-screen bg-gray-50 p-6">
-                <div className="max-w-7xl mx-auto">
-                    {/* Header */}
-                    <div className="mb-8">
-                        <h1 className="text-3xl font-bold text-gray-800">Cashier Dashboard</h1>
-                        <p className="text-gray-600 mt-2">Welcome to the cashier interface</p>
-                    </div>
+const formatPeso = (amount = 0) => {
+    const safeAmount = Number(amount) || 0;
+    return `P${safeAmount.toLocaleString('en-PH', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+    })}`;
+};
 
-                    {/* Quick Stats */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-                        <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-                            <div className="flex items-center justify-between">
-                                <div>
-                                    <p className="text-sm text-gray-600">Today's Sales</p>
-                                    <p className="text-2xl font-bold text-gray-800">₱0.00</p>
-                                </div>
-                                <div className="p-3 bg-blue-100 rounded-lg">
-                                    <DollarSign className="w-6 h-6 text-blue-600" />
-                                </div>
-                            </div>
-                        </div>
+const formatCount = (value = 0) => {
+    const safeValue = Number(value) || 0;
+    return safeValue.toLocaleString('en-PH');
+};
 
-                        <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-                            <div className="flex items-center justify-between">
-                                <div>
-                                    <p className="text-sm text-gray-600">Active Orders</p>
-                                    <p className="text-2xl font-bold text-gray-800">0</p>
-                                </div>
-                                <div className="p-3 bg-green-100 rounded-lg">
-                                    <Clock className="w-6 h-6 text-green-600" />
-                                </div>
-                            </div>
-                        </div>
+const formatPercent = (value = 0) => {
+    const safeValue = Number(value) || 0;
+    return `${safeValue.toFixed(0)}%`;
+};
 
-                        <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-                            <div className="flex items-center justify-between">
-                                <div>
-                                    <p className="text-sm text-gray-600">Tables Occupied</p>
-                                    <p className="text-2xl font-bold text-gray-800">0/0</p>
-                                </div>
-                                <div className="p-3 bg-purple-100 rounded-lg">
-                                    <Users className="w-6 h-6 text-purple-600" />
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-                            <div className="flex items-center justify-between">
-                                <div>
-                                    <p className="text-sm text-gray-600">Ready Orders</p>
-                                    <p className="text-2xl font-bold text-gray-800">0</p>
-                                </div>
-                                <div className="p-3 bg-yellow-100 rounded-lg">
-                                    <ShoppingCart className="w-6 h-6 text-yellow-600" />
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* Main Content */}
-                    <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-                        <h2 className="text-xl font-bold text-gray-800 mb-4">Quick Actions</h2>
-                        
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                            <a 
-                                href="/cashier/pos"
-                                className="p-6 border-2 border-blue-200 rounded-xl hover:border-blue-500 hover:bg-blue-50 transition-all duration-200 text-center"
-                            >
-                                <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-100 rounded-full mb-4">
-                                    <ShoppingCart className="w-8 h-8 text-blue-600" />
-                                </div>
-                                <h3 className="text-lg font-semibold text-gray-800 mb-2">Open POS</h3>
-                                <p className="text-gray-600">Start taking orders and payments</p>
-                            </a>
-
-                            <a 
-                                href="/admin/reports"
-                                className="p-6 border-2 border-green-200 rounded-xl hover:border-green-500 hover:bg-green-50 transition-all duration-200 text-center"
-                            >
-                                <div className="inline-flex items-center justify-center w-16 h-16 bg-green-100 rounded-full mb-4">
-                                    <DollarSign className="w-8 h-8 text-green-600" />
-                                </div>
-                                <h3 className="text-lg font-semibold text-gray-800 mb-2">View Reports</h3>
-                                <p className="text-gray-600">Check sales and performance</p>
-                            </a>
-
-                            <div className="p-6 border-2 border-gray-200 rounded-xl text-center">
-                                <div className="inline-flex items-center justify-center w-16 h-16 bg-gray-100 rounded-full mb-4">
-                                    <Clock className="w-8 h-8 text-gray-600" />
-                                </div>
-                                <h3 className="text-lg font-semibold text-gray-800 mb-2">Order History</h3>
-                                <p className="text-gray-600">View past orders and transactions</p>
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* Instructions */}
-                    <div className="mt-8 bg-blue-50 border border-blue-200 rounded-xl p-6">
-                        <h3 className="text-lg font-semibold text-blue-800 mb-3">Getting Started</h3>
-                        <ul className="space-y-2 text-blue-700">
-                            <li className="flex items-start">
-                                <span className="inline-flex items-center justify-center w-6 h-6 bg-blue-100 rounded-full mr-3 mt-0.5">
-                                    1
-                                </span>
-                                Click "Open POS" to start taking orders
-                            </li>
-                            <li className="flex items-start">
-                                <span className="inline-flex items-center justify-center w-6 h-6 bg-blue-100 rounded-full mr-3 mt-0.5">
-                                    2
-                                </span>
-                                Add menu items to the order cart
-                            </li>
-                            <li className="flex items-start">
-                                <span className="inline-flex items-center justify-center w-6 h-6 bg-blue-100 rounded-full mr-3 mt-0.5">
-                                    3
-                                </span>
-                                Adjust people count and discount cards
-                            </li>
-                            <li className="flex items-start">
-                                <span className="inline-flex items-center justify-center w-6 h-6 bg-blue-100 rounded-full mr-3 mt-0.5">
-                                    4
-                                </span>
-                                Select table for dine-in orders
-                            </li>
-                            <li className="flex items-start">
-                                <span className="inline-flex items-center justify-center w-6 h-6 bg-blue-100 rounded-full mr-3 mt-0.5">
-                                    5
-                                </span>
-                                Place order and process payment
-                            </li>
-                        </ul>
-                    </div>
-                </div>
+const StatCard = ({ icon: Icon, label, value, hint, color }) => (
+    <Card className="transition hover:-translate-y-0.5 hover:shadow-md">
+        <CardHeader className="pb-2">
+            <div className="flex items-center justify-between gap-3">
+                <CardDescription>{label}</CardDescription>
+                <span className={`inline-flex h-9 w-9 items-center justify-center rounded-lg ${color}`}>
+                    <Icon className="h-4 w-4" />
+                </span>
             </div>
-        </>
+        </CardHeader>
+        <CardContent>
+            <p className="text-2xl font-bold text-gray-900">{value}</p>
+            <p className="mt-1 text-xs text-gray-500">{hint}</p>
+        </CardContent>
+    </Card>
+);
+
+export default function CashierDashboard({ auth, stats = {} }) {
+    const role = (auth?.user?.role || 'resto').toLowerCase();
+    const isManager = role === 'resto_admin' || role === 'manager';
+    const dashboardLabel = isManager ? 'Manager Dashboard' : 'Cashier Dashboard';
+    const occupiedTables = Number(stats.occupiedTables) || 0;
+    const totalTables = Number(stats.totalTables) || 0;
+    const availableTables = Math.max(totalTables - occupiedTables, 0);
+    const tableUtilization = totalTables > 0 ? (occupiedTables / totalTables) * 100 : 0;
+
+    const statCards = [
+        {
+            icon: DollarSign,
+            label: 'Today Sales',
+            value: formatPeso(stats.todaySales),
+            hint: 'Completed sales for today',
+            color: 'bg-blue-50 text-blue-700',
+        },
+        {
+            icon: ShoppingBasket,
+            label: 'Active Orders',
+            value: formatCount(stats.activeOrders),
+            hint: 'Pending, preparing, and ready',
+            color: 'bg-violet-50 text-violet-700',
+        },
+        {
+            icon: CheckCircle2,
+            label: 'Ready Orders',
+            value: formatCount(stats.readyOrders),
+            hint: 'Ready to settle at cashier',
+            color: 'bg-emerald-50 text-emerald-700',
+        },
+        {
+            icon: ChartBar,
+            label: 'Table Utilization',
+            value: `${formatCount(occupiedTables)} / ${formatCount(totalTables)}`,
+            hint: `${formatPercent(tableUtilization)} occupied - ${formatCount(availableTables)} available`,
+            color: 'bg-sky-50 text-sky-700',
+        },
+        {
+            icon: UtensilsCrossed,
+            label: 'Menu Availability',
+            value: formatCount(stats.availableMenuItems),
+            hint: `${formatCount(stats.activeMenuCategories)} active categories`,
+            color: 'bg-fuchsia-50 text-fuchsia-700',
+        },
+        {
+            icon: TriangleAlert,
+            label: 'Low Stock',
+            value: formatCount(stats.lowStockItems),
+            hint: 'Ingredients/items near threshold',
+            color: 'bg-amber-50 text-amber-700',
+        },
+    ];
+
+    return (
+        <AdminLayout auth={auth}>
+            <Head title={dashboardLabel} />
+
+            <div className="space-y-6">
+                <Card>
+                    <CardHeader>
+                        <CardDescription className="text-xs uppercase tracking-wide text-gray-500">{dashboardLabel}</CardDescription>
+                        <CardTitle className="text-3xl font-bold text-gray-900">Cashier Performance Stats</CardTitle>
+                        <CardDescription>Live numbers for orders, sales, tables, and menu readiness.</CardDescription>
+                    </CardHeader>
+                </Card>
+
+                <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    {statCards.map((card) => (
+                        <StatCard key={card.label} {...card} />
+                    ))}
+                </section>
+            </div>
+        </AdminLayout>
     );
 }

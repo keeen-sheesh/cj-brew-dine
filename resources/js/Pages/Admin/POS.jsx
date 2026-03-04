@@ -156,6 +156,23 @@ const getCurrentPhilippineDate = () => {
     });
 };
 
+const getCurrentUnixSeconds = () => Math.floor(Date.now() / 1000);
+
+const normalizeMenuTimestamp = (value) => {
+    const numericValue = Number(value);
+
+    if (!Number.isFinite(numericValue) || numericValue <= 0) {
+        return 0;
+    }
+
+    // Accept seconds or milliseconds and always keep seconds in state.
+    if (numericValue > 9999999999) {
+        return Math.floor(numericValue / 1000);
+    }
+
+    return Math.floor(numericValue);
+};
+
 // Get image URL helper function
 const getImageUrl = (imagePath) => {
     if (!imagePath) return null;
@@ -186,6 +203,7 @@ export default function POS({
     pendingOrders: initialPendingOrders = [],
     readyOrders = [],
     appName = 'Restaurant POS',
+    menuLastUpdated = 0,
     flash = {}
 }) {
     const { auth } = usePage().props;
@@ -225,12 +243,12 @@ export default function POS({
     // Auto-refresh state
     const [isPollingActive, setIsPollingActive] = useState(true);
     const [pollingStats, setPollingStats] = useState({ menu: 0, orders: 0, errors: 0 });
-    const [lastMenuUpdate, setLastMenuUpdate] = useState(Date.now());
-    const [lastOrderUpdate, setLastOrderUpdate] = useState(Date.now());
     
     // Modal states
     const [showPaymentModal, setShowPaymentModal] = useState(false);
     const [showDiscountModal, setShowDiscountModal] = useState(false);
+    const [showPriceChoiceModal, setShowPriceChoiceModal] = useState(false);
+    const [selectedDualPriceItem, setSelectedDualPriceItem] = useState(null);
     const [selectedPaymentMethod, setSelectedPaymentMethod] = useState(null);
     const [cashAmount, setCashAmount] = useState('');
     const [modalPeopleCount, setModalPeopleCount] = useState(1);
@@ -242,6 +260,13 @@ export default function POS({
     const menuPollTimeoutRef = useRef(null);
     const orderPollTimeoutRef = useRef(null);
     const mountedRef = useRef(true);
+    const menuPollInFlightRef = useRef(false);
+    const orderPollInFlightRef = useRef(false);
+    const pollingErrorsRef = useRef(0);
+    const lastMenuUpdateRef = useRef(normalizeMenuTimestamp(menuLastUpdated));
+    const lastOrderUpdateRef = useRef(Date.now());
+    const pendingOrdersRef = useRef(initialPendingOrders);
+    const readyNotifiedOrderIdsRef = useRef(new Set());
     
     // Current time state for header
     const [currentTime, setCurrentTime] = useState(getCurrentPhilippineTime());
@@ -279,14 +304,35 @@ export default function POS({
         };
     }, []);
 
+    // Keep local state synced when Inertia props are refreshed after actions.
+    useEffect(() => {
+        setCategories(initialCategories);
+    }, [initialCategories]);
+
+    useEffect(() => {
+        setPendingOrders(initialPendingOrders);
+        pendingOrdersRef.current = initialPendingOrders;
+    }, [initialPendingOrders]);
+
+    useEffect(() => {
+        pendingOrdersRef.current = pendingOrders;
+    }, [pendingOrders]);
+
+    useEffect(() => {
+        const normalized = normalizeMenuTimestamp(menuLastUpdated);
+        lastMenuUpdateRef.current = normalized;
+    }, [menuLastUpdated]);
+
     // ============ PROFESSIONAL AUTO-REFRESH WITH ADAPTIVE POLLING ============
     
     // Menu polling function
     const pollMenuUpdates = useCallback(async () => {
-        if (!mountedRef.current || !isPollingActive) return;
+        if (!mountedRef.current || !isPollingActive || menuPollInFlightRef.current) return;
+        menuPollInFlightRef.current = true;
+        let nextDelay = 2000;
         
         try {
-            const response = await fetch(`/cashier/pos/menu-updates?last_update=${lastMenuUpdate}`, {
+            const response = await fetch(`/cashier/pos/menu-updates?last_update=${lastMenuUpdateRef.current}`, {
                 headers: {
                     'Accept': 'application/json',
                     'X-Requested-With': 'XMLHttpRequest',
@@ -302,15 +348,13 @@ export default function POS({
                 if (data.success) {
                     setConnectionStatus('connected');
                     setPollingStats(prev => ({ ...prev, menu: prev.menu + 1, errors: 0 }));
+                    pollingErrorsRef.current = 0;
                     
                     if (data.updated && data.categories) {
                         setCategories(data.categories);
-                        setLastMenuUpdate(data.menu_last_updated || Date.now());
+                        const normalizedUpdate = normalizeMenuTimestamp(data.menu_last_updated) || getCurrentUnixSeconds();
+                        lastMenuUpdateRef.current = normalizedUpdate;
                         setLastUpdate(new Date());
-                    }
-                    
-                    if (mountedRef.current && isPollingActive) {
-                        menuPollTimeoutRef.current = setTimeout(pollMenuUpdates, 2000);
                     }
                 } else {
                     throw new Error('Invalid response');
@@ -325,21 +369,25 @@ export default function POS({
             
             setConnectionStatus('disconnected');
             setPollingStats(prev => ({ ...prev, errors: prev.errors + 1 }));
-            
-            const backoffTime = Math.min(30000, 2000 * Math.pow(1.5, pollingStats.errors));
-            
+            pollingErrorsRef.current += 1;
+            nextDelay = Math.min(30000, 2000 * Math.pow(1.5, pollingErrorsRef.current));
+        } finally {
+            menuPollInFlightRef.current = false;
             if (mountedRef.current && isPollingActive) {
-                menuPollTimeoutRef.current = setTimeout(pollMenuUpdates, backoffTime);
+                if (menuPollTimeoutRef.current) clearTimeout(menuPollTimeoutRef.current);
+                menuPollTimeoutRef.current = setTimeout(pollMenuUpdates, nextDelay);
             }
         }
-    }, [lastMenuUpdate, isPollingActive, pollingStats.errors]);
+    }, [isPollingActive]);
 
     // Order polling function - checks for ready orders
     const pollOrderUpdates = useCallback(async () => {
-        if (!mountedRef.current || !isPollingActive) return;
+        if (!mountedRef.current || !isPollingActive || orderPollInFlightRef.current) return;
+        orderPollInFlightRef.current = true;
+        let nextDelay = 3000;
         
         try {
-            const response = await fetch(`/cashier/pos/order-updates?last_update=${lastOrderUpdate}`, {
+            const response = await fetch(`/cashier/pos/order-updates?last_update=${lastOrderUpdateRef.current}`, {
                 headers: {
                     'Accept': 'application/json',
                     'X-Requested-With': 'XMLHttpRequest',
@@ -355,6 +403,7 @@ export default function POS({
                 if (data.success) {
                     setConnectionStatus('connected');
                     setPollingStats(prev => ({ ...prev, orders: prev.orders + 1, errors: 0 }));
+                    pollingErrorsRef.current = 0;
                     
                     if (data.pending_orders) {
                         // Format order numbers for display
@@ -364,37 +413,42 @@ export default function POS({
                         }));
                         
                         // Check for newly ready orders
-                        const previousOrders = pendingOrders;
+                        const previousOrders = pendingOrdersRef.current;
                         const newReadyOrders = formattedOrders.filter(newOrder => {
                             const oldOrder = previousOrders.find(o => o.id === newOrder.id);
                             // If order was not ready before but is now ready
-                            return oldOrder && oldOrder.status !== 'ready' && newOrder.status === 'ready';
+                            return oldOrder
+                                && oldOrder.status !== 'ready'
+                                && newOrder.status === 'ready'
+                                && !readyNotifiedOrderIdsRef.current.has(newOrder.id);
                         });
                         
                         // Add new ready orders to notifications
                         if (newReadyOrders.length > 0) {
-                            setReadyOrderNotifications(prev => [
-                                ...prev,
-                                ...newReadyOrders.map(order => ({
-                                    id: order.id,
-                                    orderNumber: order.display_order_number,
-                                    customerName: order.customer_name || 'Walk-in Customer',
-                                    isHotel: order.payment_method_name === 'Hotel',
-                                    roomNumber: order.room_number,
-                                    timestamp: Date.now()
-                                }))
-                            ]);
+                            newReadyOrders.forEach(order => readyNotifiedOrderIdsRef.current.add(order.id));
+                            setReadyOrderNotifications(prev => {
+                                const existingIds = new Set(prev.map(notification => notification.id));
+                                const additions = newReadyOrders
+                                    .filter(order => !existingIds.has(order.id))
+                                    .map(order => ({
+                                        id: order.id,
+                                        orderNumber: order.display_order_number,
+                                        customerName: order.customer_name || 'Walk-in Customer',
+                                        isHotel: order.payment_method_name === 'Hotel',
+                                        roomNumber: order.room_number,
+                                        timestamp: Date.now()
+                                    }));
+
+                                return additions.length > 0 ? [...prev, ...additions] : prev;
+                            });
                         }
                         
+                        pendingOrdersRef.current = formattedOrders;
                         setPendingOrders(formattedOrders);
                     }
                     
-                    setLastOrderUpdate(Date.now());
+                    lastOrderUpdateRef.current = Date.now();
                     setLastUpdate(new Date());
-                    
-                    if (mountedRef.current && isPollingActive) {
-                        orderPollTimeoutRef.current = setTimeout(pollOrderUpdates, 3000);
-                    }
                 } else {
                     throw new Error('Invalid response');
                 }
@@ -408,14 +462,16 @@ export default function POS({
             
             setConnectionStatus('disconnected');
             setPollingStats(prev => ({ ...prev, errors: prev.errors + 1 }));
-            
-            const backoffTime = Math.min(30000, 3000 * Math.pow(1.5, pollingStats.errors));
-            
+            pollingErrorsRef.current += 1;
+            nextDelay = Math.min(30000, 3000 * Math.pow(1.5, pollingErrorsRef.current));
+        } finally {
+            orderPollInFlightRef.current = false;
             if (mountedRef.current && isPollingActive) {
-                orderPollTimeoutRef.current = setTimeout(pollOrderUpdates, backoffTime);
+                if (orderPollTimeoutRef.current) clearTimeout(orderPollTimeoutRef.current);
+                orderPollTimeoutRef.current = setTimeout(pollOrderUpdates, nextDelay);
             }
         }
-    }, [lastOrderUpdate, isPollingActive, pollingStats.errors, pendingOrders]);
+    }, [isPollingActive]);
 
     // Start polling
     useEffect(() => {
@@ -578,6 +634,62 @@ export default function POS({
     };
 
     const filteredItems = getFilteredItems();
+    const allItemsCount = categories.reduce((sum, category) => sum + (category.items?.length || 0), 0);
+
+    const getEffectiveAvailable = (item) => {
+        if (!item) return null;
+
+        const servingsRaw = item.inventory_available_servings;
+        if (servingsRaw !== null && servingsRaw !== undefined && servingsRaw !== '') {
+            const servings = Number(servingsRaw);
+            if (Number.isFinite(servings)) {
+                return Math.max(0, Math.floor(servings));
+            }
+        }
+
+        if (item.stock_quantity === null || item.stock_quantity === undefined) {
+            return null;
+        }
+
+        const stock = Number(item.stock_quantity);
+        if (!Number.isFinite(stock)) {
+            return null;
+        }
+
+        return Math.max(0, Math.floor(stock));
+    };
+
+    const getStockUnitLabel = (item) => {
+        const servingsRaw = item?.inventory_available_servings;
+        if (servingsRaw !== null && servingsRaw !== undefined && servingsRaw !== '') {
+            return 'serving';
+        }
+        return 'item';
+    };
+
+    const isOutOfStock = (item) => {
+        if (item?.inventory_status === 'out') {
+            return true;
+        }
+        const available = getEffectiveAvailable(item);
+        return available !== null && available <= 0;
+    };
+
+    const hasDualPriceOptions = (item) => {
+        if (!item || item.pricing_type !== 'dual') {
+            return false;
+        }
+
+        const solo = Number(item.price_solo);
+        const whole = Number(item.price_whole);
+
+        return Number.isFinite(solo) && solo > 0 && Number.isFinite(whole) && whole > 0;
+    };
+
+    const closePriceChoiceModal = () => {
+        setShowPriceChoiceModal(false);
+        setSelectedDualPriceItem(null);
+    };
 
     // ============ NOTIFICATIONS ============
     const showNotification = (message, type = 'success') => {
@@ -601,24 +713,38 @@ export default function POS({
     };
 
     // ============ ORDER MANAGEMENT WITH STOCK CHECKING ============
-    const addToOrder = (item) => {
+    const addToOrder = (item, options = {}) => {
         if (item.is_available === false) {
             showNotification(`${item.name} is unavailable`, 'error');
             return;
         }
-        
-        if (item.stock_quantity !== null) {
-            const existingItem = orderItems.find(oi => oi.id === item.id);
-            const currentQuantity = existingItem ? existingItem.quantity : 0;
-            
-            if (currentQuantity + 1 > item.stock_quantity) {
-                showNotification(`Only ${item.stock_quantity} ${item.stock_quantity === 1 ? 'item' : 'items'} available`, 'error');
+
+        const selectedPortion = options.portion || null;
+        const rawSelectedPrice = options.price !== undefined && options.price !== null
+            ? Number(options.price)
+            : Number(item.price);
+        const selectedPrice = Number.isFinite(rawSelectedPrice) ? rawSelectedPrice : (Number(item.price) || 0);
+        const cartKey = `${item.id}:${selectedPortion || 'single'}`;
+        const displayName = selectedPortion
+            ? `${item.name} (${selectedPortion === 'solo' ? 'Solo' : 'Whole'})`
+            : item.name;
+
+        const available = getEffectiveAvailable(item);
+        const stockUnit = getStockUnitLabel(item);
+
+        if (available !== null) {
+            const currentQuantity = orderItems
+                .filter(oi => oi.id === item.id)
+                .reduce((sum, oi) => sum + oi.quantity, 0);
+
+            if (currentQuantity + 1 > available) {
+                showNotification(`Only ${available} ${available === 1 ? stockUnit : `${stockUnit}s`} available`, 'error');
                 return;
             }
         }
-        
-        const existingItemIndex = orderItems.findIndex(oi => oi.id === item.id);
-        
+
+        const existingItemIndex = orderItems.findIndex(oi => oi.cartKey === cartKey);
+
         if (existingItemIndex >= 0) {
             const updatedItems = [...orderItems];
             updatedItems[existingItemIndex].quantity += 1;
@@ -626,17 +752,35 @@ export default function POS({
         } else {
             setOrderItems([...orderItems, {
                 id: item.id,
-                name: item.name,
-                price: Number(item.price),
+                cartKey,
+                name: displayName,
+                baseName: item.name,
+                portion: selectedPortion,
+                price: selectedPrice,
                 quantity: 1,
-                stock: item.stock_quantity,
-                originalStock: item.stock_quantity,
+                stock: available,
+                stockUnit,
+                originalStock: available,
                 image: item.image,
                 notes: ''
             }]);
         }
-        
-        showNotification(`${item.name} added`, 'success');
+
+        showNotification(`${displayName} added`, 'success');
+    };
+
+    const handleMenuItemClick = (item) => {
+        if (item.is_available === false || isOutOfStock(item)) {
+            return;
+        }
+
+        if (hasDualPriceOptions(item)) {
+            setSelectedDualPriceItem(item);
+            setShowPriceChoiceModal(true);
+            return;
+        }
+
+        addToOrder(item);
     };
 
     // Open notes modal for item
@@ -672,7 +816,8 @@ export default function POS({
         }
         
         if (change > 0 && item.stock !== null && newQuantity > item.stock) {
-            showNotification(`Only ${item.stock} available`, 'warning');
+            const stockUnit = item.stockUnit || 'item';
+            showNotification(`Only ${item.stock} ${item.stock === 1 ? stockUnit : `${stockUnit}s`} available`, 'warning');
             return;
         }
         
@@ -709,25 +854,33 @@ export default function POS({
             return;
         }
 
-        for (const cartItem of orderItems) {
+        const requestedByItemId = orderItems.reduce((acc, cartItem) => {
+            acc[cartItem.id] = (acc[cartItem.id] || 0) + cartItem.quantity;
+            return acc;
+        }, {});
+
+        for (const [itemId, requestedQty] of Object.entries(requestedByItemId)) {
             let currentStock = null;
+            let currentStockUnit = 'item';
+            let currentName = 'Item';
+
             for (const category of categories) {
-                const found = category.items?.find(i => i.id === cartItem.id);
+                const found = category.items?.find(i => i.id === Number(itemId));
                 if (found) {
-                    currentStock = found.stock_quantity;
+                    currentStock = getEffectiveAvailable(found);
+                    currentStockUnit = getStockUnitLabel(found);
+                    currentName = found.name || currentName;
                     break;
                 }
             }
-            
-            if (currentStock !== null && currentStock !== undefined) {
-                if (cartItem.quantity > currentStock) {
-                    showNotification(`Stock changed for ${cartItem.name}. Only ${currentStock} available.`, 'error');
-                    const updatedItems = orderItems.map(item => 
-                        item.id === cartItem.id ? { ...item, stock: currentStock } : item
-                    );
-                    setOrderItems(updatedItems);
-                    return;
-                }
+
+            if (currentStock !== null && currentStock !== undefined && Number(requestedQty) > currentStock) {
+                showNotification(`Stock changed for ${currentName}. Only ${currentStock} ${currentStock === 1 ? currentStockUnit : `${currentStockUnit}s`} available.`, 'error');
+                const updatedItems = orderItems.map(item =>
+                    item.id === Number(itemId) ? { ...item, stock: currentStock, stockUnit: currentStockUnit } : item
+                );
+                setOrderItems(updatedItems);
+                return;
             }
         }
 
@@ -759,23 +912,6 @@ export default function POS({
         if (selectedPaymentMethod.name === 'Hotel' && (!hotelInfo.guestName || !hotelInfo.roomNumber)) {
             showNotification('Enter guest name and room number', 'error');
             return;
-        }
-
-        for (const cartItem of orderItems) {
-            let currentStock = null;
-            for (const category of categories) {
-                const found = category.items?.find(i => i.id === cartItem.id);
-                if (found) {
-                    currentStock = found.stock_quantity;
-                    break;
-                }
-            }
-            
-            if (currentStock !== null && currentStock !== undefined && cartItem.quantity > currentStock) {
-                showNotification(`Insufficient stock for ${cartItem.name}`, 'error');
-                setShowPaymentModal(false);
-                return;
-            }
         }
 
         setIsLoading(true);
@@ -861,8 +997,9 @@ export default function POS({
                 setItemNotes({});
                 setIsLoading(false);
                 
-                setLastMenuUpdate(Date.now());
-                setLastOrderUpdate(Date.now());
+                // Force the next poll cycle to fetch fresh menu stock immediately.
+                lastMenuUpdateRef.current = 0;
+                lastOrderUpdateRef.current = Date.now();
             },
             onError: (errors) => {
                 console.error('Order error:', errors);
@@ -879,7 +1016,7 @@ export default function POS({
         
         setProcessingOrder(orderId);
         
-        fetch(`/admin/orders/${orderId}/complete`, {
+        fetch(`/cashier/orders/${orderId}/complete`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -894,7 +1031,7 @@ export default function POS({
                 setPendingOrders(prev => prev.filter(order => order.id !== orderId));
                 // Remove from notifications if it was there
                 setReadyOrderNotifications(prev => prev.filter(n => n.id !== orderId));
-                setLastOrderUpdate(Date.now());
+                lastOrderUpdateRef.current = Date.now();
             } else {
                 showNotification(data.error || 'Failed to complete order', 'error');
             }
@@ -903,6 +1040,38 @@ export default function POS({
         .catch(error => {
             console.error('Complete order error:', error);
             showNotification('Failed to complete order', 'error');
+            setProcessingOrder(null);
+        });
+    };
+
+    const cancelOrder = (orderId) => {
+        if (!window.confirm('Cancel this order and restock ingredients?')) return;
+
+        setProcessingOrder(orderId);
+
+        fetch(`/cashier/orders/${orderId}/cancel`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
+                'Accept': 'application/json',
+            },
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                showNotification(data.message || `Order #${orderId} cancelled`, 'success');
+                setPendingOrders(prev => prev.filter(order => order.id !== orderId));
+                setReadyOrderNotifications(prev => prev.filter(n => n.id !== orderId));
+                lastOrderUpdateRef.current = Date.now();
+            } else {
+                showNotification(data.error || 'Failed to cancel order', 'error');
+            }
+            setProcessingOrder(null);
+        })
+        .catch(error => {
+            console.error('Cancel order error:', error);
+            showNotification('Failed to cancel order', 'error');
             setProcessingOrder(null);
         });
     };
@@ -924,6 +1093,9 @@ export default function POS({
             const orderData = await orderRes.json();
             
             if (menuData.success) setCategories(menuData.categories);
+            if (menuData.success) {
+                lastMenuUpdateRef.current = normalizeMenuTimestamp(menuData.menu_last_updated) || getCurrentUnixSeconds();
+            }
             if (orderData.success) {
                 // Format order numbers
                 const formattedOrders = orderData.pending_orders.map(order => ({
@@ -934,8 +1106,7 @@ export default function POS({
             }
             
             setLastUpdate(new Date());
-            setLastMenuUpdate(Date.now());
-            setLastOrderUpdate(Date.now());
+            lastOrderUpdateRef.current = Date.now();
             showNotification('Data refreshed', 'success');
         } catch (error) {
             showNotification('Refresh failed', 'error');
@@ -1280,7 +1451,7 @@ export default function POS({
                                             )}
                                             {item.stock !== null && (
                                                 <p className="text-xs text-gray-400 mt-1">
-                                                    Stock available: {item.stock}
+                                                    Stock available: {item.stock} {item.stock === 1 ? (item.stockUnit || 'item') : `${item.stockUnit || 'item'}s`}
                                                 </p>
                                             )}
                                         </div>
@@ -1379,56 +1550,33 @@ export default function POS({
                     <div className={`${showPendingOrders ? 'w-[45%]' : 'w-[70%]'} flex flex-col bg-gray-50 transition-all duration-300`}>
                         {/* Search */}
                         <div className="bg-white border-b border-gray-200 p-4">
-                            <div className="relative">
-                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                                <input
-                                    type="text"
-                                    value={searchQuery}
-                                    onChange={(e) => setSearchQuery(e.target.value)}
-                                    placeholder="Search products..."
-                                    className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                />
-                            </div>
-                        </div>
-
-                        {/* Categories */}
-                        <div className="bg-white px-4 py-3 border-b border-gray-200 overflow-x-auto">
                             <div className="flex gap-2">
-                                <button
-                                    onClick={() => setActiveCategory('all')}
-                                    className={`px-4 py-2 rounded-lg font-medium whitespace-nowrap ${
-                                        activeCategory === 'all'
-                                            ? 'bg-blue-600 text-white'
-                                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                                    }`}>
-                                    All Items
-                                </button>
-                                {categories.map(category => {
-                                    const Icon = categoryIcons[category.name] || ChefHat;
-                                    const itemCount = category.items?.length || 0;
-                                    return (
-                                        <button
-                                            key={category.id}
-                                            onClick={() => setActiveCategory(category.id.toString())}
-                                            className={`px-4 py-2 rounded-lg font-medium whitespace-nowrap flex items-center gap-2 ${
-                                                activeCategory === category.id.toString()
-                                                    ? 'bg-blue-600 text-white'
-                                                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                                            }`}>
-                                            <Icon className="w-4 h-4" />
-                                            <span>{category.name}</span>
-                                            {itemCount > 0 && (
-                                                <span className={`text-xs px-1.5 py-0.5 rounded-full ${
-                                                    activeCategory === category.id.toString()
-                                                        ? 'bg-blue-500 text-white'
-                                                        : 'bg-gray-300 text-gray-700'
-                                                }`}>
-                                                    {itemCount}
-                                                </span>
-                                            )}
-                                        </button>
-                                    );
-                                })}
+                                <div className="relative flex-1">
+                                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                                    <input
+                                        type="text"
+                                        value={searchQuery}
+                                        onChange={(e) => setSearchQuery(e.target.value)}
+                                        placeholder="Search products..."
+                                        className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    />
+                                </div>
+
+                                <select
+                                    value={activeCategory}
+                                    onChange={(e) => setActiveCategory(e.target.value)}
+                                    className="min-w-[240px] px-3 py-2 border border-gray-300 rounded-lg bg-white text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                >
+                                    <option value="all">{`All Items (${allItemsCount})`}</option>
+                                    {categories.map((category) => {
+                                        const itemCount = category.items?.length || 0;
+                                        return (
+                                            <option key={category.id} value={category.id.toString()}>
+                                                {`${category.name} (${itemCount})`}
+                                            </option>
+                                        );
+                                    })}
+                                </select>
                             </div>
                         </div>
 
@@ -1443,14 +1591,19 @@ export default function POS({
                                 <div className="grid grid-cols-3 gap-4">
                                     {filteredItems.map(item => {
                                         const isUnavailable = item.is_available === false;
-                                        const lowStock = item.stock_quantity !== null && item.stock_quantity <= 5 && item.stock_quantity > 0;
-                                        const outOfStock = item.stock_quantity !== null && item.stock_quantity <= 0;
+                                        const available = getEffectiveAvailable(item);
+                                        const stockUnit = getStockUnitLabel(item);
+                                        const outOfStock = isOutOfStock(item);
+                                        const lowStock = !outOfStock && (
+                                            item.inventory_status === 'low' ||
+                                            (available !== null && available <= 5 && available > 0)
+                                        );
                                         const imageUrl = getImageUrl(item.image);
                                         
                                         return (
                                             <button
                                                 key={item.id}
-                                                onClick={() => !isUnavailable && !outOfStock && addToOrder(item)}
+                                                onClick={() => !isUnavailable && !outOfStock && handleMenuItemClick(item)}
                                                 disabled={isUnavailable || outOfStock}
                                                 className={`bg-white rounded-lg border border-gray-200 overflow-hidden hover:shadow-lg transition-all ${
                                                     isUnavailable || outOfStock ? 'opacity-50 cursor-not-allowed' : 'hover:border-blue-500'
@@ -1486,8 +1639,10 @@ export default function POS({
                                                     <h3 className="font-medium text-gray-900 text-sm truncate">{item.name}</h3>
                                                     <div className="flex justify-between items-center mt-1">
                                                         <p className="text-lg font-bold text-blue-600">₱{formatPrice(item.price)}</p>
-                                                        {item.stock_quantity !== null && (
-                                                            <p className="text-xs text-gray-500">Stock: {item.stock_quantity}</p>
+                                                        {available !== null && (
+                                                            <p className="text-xs text-gray-500">
+                                                                {stockUnit === 'serving' ? 'Servings' : 'Stock'}: {available}
+                                                            </p>
                                                         )}
                                                     </div>
                                                 </div>
@@ -1571,26 +1726,36 @@ export default function POS({
                                                         <span>{formatPhilippineTime(order.created_at)}</span>
                                                     </div>
                                                     
-                                                    {canCompleteOrder(order) ? (
-                                                        <button
-                                                            onClick={() => completeOrder(order.id)}
-                                                            disabled={processingOrder === order.id}
-                                                            className={`w-full py-1.5 ${button.color} text-white rounded text-sm disabled:opacity-50 flex items-center justify-center gap-1`}>
-                                                            {processingOrder === order.id ? (
-                                                                <Loader2 className="w-3 h-3 animate-spin" />
-                                                            ) : (
+                                                    <div className="grid grid-cols-2 gap-2">
+                                                        {canCompleteOrder(order) ? (
+                                                            <button
+                                                                onClick={() => completeOrder(order.id)}
+                                                                disabled={processingOrder === order.id}
+                                                                className={`${button.color} text-white rounded text-sm py-1.5 disabled:opacity-50 flex items-center justify-center gap-1`}>
+                                                                {processingOrder === order.id ? (
+                                                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                                                ) : (
+                                                                    <ButtonIcon className="w-3 h-3" />
+                                                                )}
+                                                                {processingOrder === order.id ? 'Processing...' : button.text}
+                                                            </button>
+                                                        ) : (
+                                                            <button
+                                                                disabled
+                                                                className="bg-gray-400 text-white rounded text-sm py-1.5 cursor-not-allowed flex items-center justify-center gap-1">
                                                                 <ButtonIcon className="w-3 h-3" />
-                                                            )}
-                                                            {processingOrder === order.id ? 'Processing...' : button.text}
-                                                        </button>
-                                                    ) : (
+                                                                {button.text}
+                                                            </button>
+                                                        )}
+
                                                         <button
-                                                            disabled
-                                                            className="w-full py-1.5 bg-gray-400 text-white rounded text-sm cursor-not-allowed flex items-center justify-center gap-1">
-                                                            <ButtonIcon className="w-3 h-3" />
-                                                            {button.text}
+                                                            onClick={() => cancelOrder(order.id)}
+                                                            disabled={processingOrder === order.id}
+                                                            className="bg-red-500 hover:bg-red-600 text-white rounded text-sm py-1.5 disabled:opacity-50 flex items-center justify-center gap-1">
+                                                            <Ban className="w-3 h-3" />
+                                                            Cancel
                                                         </button>
-                                                    )}
+                                                    </div>
                                                 </div>
                                             );
                                         })}
@@ -1924,6 +2089,61 @@ export default function POS({
                                 onClick={() => setShowDiscountModal(false)}
                                 className="flex-1 py-2 bg-amber-500 text-white rounded-lg font-medium hover:bg-amber-600">
                                 Apply
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Dual Price Choice Modal */}
+            {showPriceChoiceModal && selectedDualPriceItem && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-xl shadow-2xl max-w-md w-full">
+                        <div className="p-6 border-b border-gray-200">
+                            <div className="flex items-center justify-between">
+                                <h2 className="text-xl font-bold">Select Portion</h2>
+                                <button onClick={closePriceChoiceModal} className="p-1 hover:bg-gray-100 rounded-lg">
+                                    <X className="w-5 h-5" />
+                                </button>
+                            </div>
+                            <p className="text-sm text-gray-600 mt-2">{selectedDualPriceItem.name}</p>
+                        </div>
+                        <div className="p-6">
+                            <div className="grid grid-cols-2 gap-3">
+                                <button
+                                    onClick={() => {
+                                        addToOrder(selectedDualPriceItem, {
+                                            portion: 'solo',
+                                            price: selectedDualPriceItem.price_solo,
+                                        });
+                                        closePriceChoiceModal();
+                                    }}
+                                    className="p-4 rounded-lg border-2 border-blue-200 bg-blue-50 hover:bg-blue-100 transition-colors text-left"
+                                >
+                                    <p className="text-sm font-semibold text-blue-800">Solo</p>
+                                    <p className="text-xl font-bold text-blue-600 mt-1">₱{formatPrice(selectedDualPriceItem.price_solo)}</p>
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        addToOrder(selectedDualPriceItem, {
+                                            portion: 'whole',
+                                            price: selectedDualPriceItem.price_whole,
+                                        });
+                                        closePriceChoiceModal();
+                                    }}
+                                    className="p-4 rounded-lg border-2 border-emerald-200 bg-emerald-50 hover:bg-emerald-100 transition-colors text-left"
+                                >
+                                    <p className="text-sm font-semibold text-emerald-800">Whole</p>
+                                    <p className="text-xl font-bold text-emerald-600 mt-1">₱{formatPrice(selectedDualPriceItem.price_whole)}</p>
+                                </button>
+                            </div>
+                        </div>
+                        <div className="p-6 border-t border-gray-200">
+                            <button
+                                onClick={closePriceChoiceModal}
+                                className="w-full py-2 bg-gray-100 text-gray-700 rounded-lg font-medium hover:bg-gray-200"
+                            >
+                                Cancel
                             </button>
                         </div>
                     </div>

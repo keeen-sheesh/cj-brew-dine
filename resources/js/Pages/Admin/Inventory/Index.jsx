@@ -1,13 +1,12 @@
 // resources/js/Pages/Admin/Inventory/Index.jsx
 
 import React, { useState, useEffect } from 'react';
+import { Head } from '@inertiajs/react';
 import { 
     Package, 
     ChefHat, 
     ShoppingCart, 
     AlertTriangle, 
-    BarChart3,
-    Truck,
     Settings,
     X,
     Loader2,
@@ -19,17 +18,22 @@ import {
     CheckCircle,
     RefreshCw,
     FileText,
-    DollarSign,
-    TrendingDown,
-    TrendingUp,
     ClipboardList,
     History
 } from 'lucide-react';
+import AdminLayout from '@/Layouts/AdminLayout';
 import Ingredients from './Ingredients';
 import RecipeManager from '../../../Components/RecipeManager';
 import LowStockWidget from './Widgets/LowStockWidget';
 
-export default function InventoryIndex({ ingredients: initialIngredients, items, stats }) {
+export default function InventoryIndex({
+    auth,
+    ingredients: initialIngredients,
+    items,
+    stats,
+    activePool = 'resto',
+    availablePools = ['resto']
+}) {
     const [activeTab, setActiveTab] = useState('ingredients');
     const [ingredients, setIngredients] = useState(initialIngredients || []);
     const [itemsList, setItemsList] = useState(items || []);
@@ -45,11 +49,14 @@ export default function InventoryIndex({ ingredients: initialIngredients, items,
     const [availableIngredients, setAvailableIngredients] = useState([]);
     const [isLoading, setIsLoading] = useState(false);
     const [notification, setNotification] = useState(null);
+    const [selectedPool, setSelectedPool] = useState(activePool);
+    const canSelectPool = availablePools.length > 1;
+    const isCombinedPool = selectedPool === 'combined';
 
     // Fetch ingredients from API
     const fetchIngredients = async () => {
         try {
-            const response = await fetch('/admin/inventory/ingredients');
+            const response = await fetch(`/admin/inventory/ingredients?pool=${encodeURIComponent(selectedPool)}`);
             const data = await response.json();
             if (data.success) {
                 setIngredients(data.ingredients);
@@ -64,7 +71,7 @@ export default function InventoryIndex({ ingredients: initialIngredients, items,
     // Fetch items with recipes
     const fetchItemsWithRecipes = async () => {
         try {
-            const response = await fetch('/admin/inventory/items-with-recipes');
+            const response = await fetch(`/admin/inventory/items-with-recipes?pool=${encodeURIComponent(selectedPool)}`);
             const data = await response.json();
             if (data.success) {
                 setItemsList(data.items);
@@ -86,9 +93,13 @@ export default function InventoryIndex({ ingredients: initialIngredients, items,
 
     // Initial data load
     useEffect(() => {
+        setSelectedPool(activePool);
+    }, [activePool]);
+
+    useEffect(() => {
         fetchIngredients();
         fetchItemsWithRecipes();
-    }, []);
+    }, [selectedPool]);
 
     // Update available ingredients when ingredients change
     useEffect(() => {
@@ -119,7 +130,10 @@ export default function InventoryIndex({ ingredients: initialIngredients, items,
                     'X-CSRF-TOKEN': getCsrfToken(),
                     'Accept': 'application/json'
                 },
-                body: JSON.stringify(recipeData)
+                body: JSON.stringify({
+                    ...recipeData,
+                    pool: selectedPool
+                })
             });
 
             const data = await response.json();
@@ -174,7 +188,7 @@ export default function InventoryIndex({ ingredients: initialIngredients, items,
         {
             label: 'Low Stock Items',
             value: localStats.low_stock_ingredients,
-            icon: TrendingDown,
+            icon: AlertTriangle,
             color: 'red',
             bg: 'bg-red-100',
             text: 'text-red-600'
@@ -184,9 +198,7 @@ export default function InventoryIndex({ ingredients: initialIngredients, items,
     const tabs = [
         { id: 'ingredients', label: 'Ingredients', icon: Package },
         { id: 'items', label: 'Items & Recipes', icon: ChefHat },
-        { id: 'purchase-orders', label: 'Purchase Orders', icon: ShoppingCart },
-        { id: 'suppliers', label: 'Suppliers', icon: Truck },
-        { id: 'reports', label: 'Reports', icon: BarChart3 }
+        { id: 'purchase-orders', label: 'Purchase Orders', icon: ShoppingCart }
     ];
 
     // Filter items based on search term
@@ -196,19 +208,23 @@ export default function InventoryIndex({ ingredients: initialIngredients, items,
     );
 
     return (
+        <AdminLayout auth={auth}>
+        <Head title="Inventory Management" />
         <div className="space-y-6">
             {/* Notifications */}
             {notification && (
-                <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg flex items-center gap-3 animate-slide-in ${
-                    notification.type === 'success' ? 'bg-green-500' : 'bg-red-500'
-                } text-white`}>
-                    {notification.type === 'success' ? 
-                        <CheckCircle className="w-5 h-5" /> : 
-                        <AlertTriangle className="w-5 h-5" />
+                <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-xl shadow-xl flex items-center gap-3 border ${
+                    notification.type === 'success'
+                        ? 'bg-white border-emerald-200 text-emerald-800'
+                        : 'bg-white border-red-200 text-red-800'
+                } `}>
+                    {notification.type === 'success'
+                        ? <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0" />
+                        : <AlertTriangle className="w-4 h-4 text-red-500 shrink-0" />
                     }
-                    <span>{notification.message}</span>
-                    <button onClick={() => setNotification(null)} className="ml-4">
-                        <X className="w-4 h-4" />
+                    <span className="text-sm font-medium">{notification.message}</span>
+                    <button onClick={() => setNotification(null)} className="ml-2 text-gray-400 hover:text-gray-600">
+                        <X className="w-3.5 h-3.5" />
                     </button>
                 </div>
             )}
@@ -216,23 +232,31 @@ export default function InventoryIndex({ ingredients: initialIngredients, items,
             {/* Header */}
             <div className="flex justify-between items-center">
                 <div>
-                    <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-3">
-                        <Package className="h-8 w-8 text-emerald-600" />
-                        Inventory Management
-                    </h1>
-                    <p className="text-gray-500 mt-1">
-                        Manage ingredients, recipes, and stock levels
-                    </p>
+                    <h1 className="text-2xl font-bold text-gray-900">Inventory Management</h1>
+                    <p className="text-sm text-gray-500 mt-0.5">Track ingredients, recipes, and stock levels</p>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex items-center gap-2">
+                    {canSelectPool && (
+                        <select
+                            value={selectedPool}
+                            onChange={(e) => setSelectedPool(e.target.value)}
+                            className="px-3 py-2 border border-gray-200 rounded-lg bg-white text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                        >
+                            {availablePools.map((pool) => (
+                                <option key={pool} value={pool}>
+                                    {pool.charAt(0).toUpperCase() + pool.slice(1)}
+                                </option>
+                            ))}
+                        </select>
+                    )}
                     <button
                         onClick={() => {
                             fetchIngredients();
                             fetchItemsWithRecipes();
                         }}
-                        className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 flex items-center gap-2"
+                        className="px-3 py-2 border border-gray-200 bg-white text-gray-600 rounded-lg hover:bg-gray-50 flex items-center gap-2 text-sm transition-colors"
                     >
-                        <RefreshCw className="h-4 w-4" />
+                        <RefreshCw className="h-3.5 w-3.5" />
                         Refresh
                     </button>
                 </div>
@@ -241,31 +265,29 @@ export default function InventoryIndex({ ingredients: initialIngredients, items,
             {/* Stats Cards */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 {statsCards.map((stat, index) => (
-                    <div key={index} className="bg-white rounded-xl p-6 border border-gray-200">
-                        <div className="flex items-center justify-between">
-                            <div>
-                                <p className="text-sm text-gray-500">{stat.label}</p>
-                                <p className="text-3xl font-bold text-gray-900 mt-1">{stat.value}</p>
-                            </div>
-                            <div className={`p-3 rounded-lg ${stat.bg}`}>
-                                <stat.icon className={`h-6 w-6 ${stat.text}`} />
-                            </div>
+                    <div key={index} className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm flex items-center gap-4">
+                        <div className={`p-2.5 rounded-lg ${stat.bg} shrink-0`}>
+                            <stat.icon className={`h-5 w-5 ${stat.text}`} />
+                        </div>
+                        <div>
+                            <p className="text-xs text-gray-500 font-medium uppercase tracking-wide">{stat.label}</p>
+                            <p className="text-2xl font-bold text-gray-900 leading-tight mt-0.5">{stat.value}</p>
                         </div>
                     </div>
                 ))}
             </div>
 
             {/* Tabs */}
-            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-                <div className="flex border-b border-gray-200 overflow-x-auto">
+            <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+                <div className="flex border-b border-gray-100 overflow-x-auto">
                     {tabs.map((tab) => (
                         <button
                             key={tab.id}
                             onClick={() => setActiveTab(tab.id)}
-                            className={`flex items-center gap-2 px-6 py-4 text-sm font-medium whitespace-nowrap transition-colors ${
+                            className={`flex items-center gap-2 px-5 py-3.5 text-sm font-medium whitespace-nowrap transition-colors ${
                                 activeTab === tab.id
-                                    ? 'text-emerald-600 border-b-2 border-emerald-600 bg-emerald-50'
-                                    : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+                                    ? 'text-emerald-600 border-b-2 border-emerald-500 bg-emerald-50/60'
+                                    : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50 border-b-2 border-transparent'
                             }`}
                         >
                             <tab.icon className="h-4 w-4" />
@@ -280,100 +302,94 @@ export default function InventoryIndex({ ingredients: initialIngredients, items,
                         <Ingredients 
                             ingredients={ingredients} 
                             onUpdate={() => fetchIngredients()}
+                            pool={selectedPool}
+                            canManage={!isCombinedPool}
                         />
                     )}
 
                     {activeTab === 'items' && (
-                        <div className="space-y-6">
+                        <div className="space-y-5">
                             <div className="flex justify-between items-center">
-                                <h2 className="text-lg font-semibold text-gray-900">Items & Recipes</h2>
-                                <p className="text-sm text-gray-500">
-                                    {localStats.total_items_with_recipe} of {itemsList.length} items have recipes
-                                </p>
+                                <div>
+                                    <h2 className="text-base font-semibold text-gray-900">Items & Recipes</h2>
+                                    <p className="text-sm text-gray-400 mt-0.5">
+                                        {localStats.total_items_with_recipe} of {itemsList.length} items have recipes
+                                    </p>
+                                </div>
                             </div>
 
                             {/* Search */}
-                            <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
-                                <div className="flex gap-2">
-                                    <div className="relative flex-1">
-                                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
-                                        <input
-                                            type="text"
-                                            value={itemSearchTerm}
-                                            onChange={(e) => setItemSearchTerm(e.target.value)}
-                                            placeholder="Search items by name or category..."
-                                            className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500"
-                                        />
-                                    </div>
-                                    {itemSearchTerm && (
-                                        <button
-                                            onClick={() => setItemSearchTerm('')}
-                                            className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 flex items-center gap-2"
-                                        >
-                                            <X className="h-4 w-4" />
-                                            Clear
-                                        </button>
-                                    )}
-                                </div>
+                            <div className="relative">
+                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                                <input
+                                    type="text"
+                                    value={itemSearchTerm}
+                                    onChange={(e) => setItemSearchTerm(e.target.value)}
+                                    placeholder="Search items by name or category…"
+                                    className="w-full pl-9 pr-10 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-gray-50 focus:bg-white transition-colors"
+                                />
                                 {itemSearchTerm && (
-                                    <p className="text-sm text-gray-500 mt-2">
-                                        Showing {filteredItems.length} of {itemsList.length} items
-                                    </p>
+                                    <button
+                                        onClick={() => setItemSearchTerm('')}
+                                        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                                    >
+                                        <X className="h-4 w-4" />
+                                    </button>
                                 )}
                             </div>
+                            {itemSearchTerm && (
+                                <p className="text-xs text-gray-400 -mt-3">
+                                    {filteredItems.length} of {itemsList.length} items
+                                </p>
+                            )}
 
                             {/* Items Grid */}
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                                 {filteredItems.map((item) => (
-                                    <div 
-                                        key={item.id} 
-                                        className="bg-white rounded-xl p-4 border border-gray-200 hover:border-emerald-300 transition-colors"
+                                    <div
+                                        key={item.id}
+                                        className="bg-white rounded-xl p-4 border border-gray-100 hover:border-emerald-200 hover:shadow-sm transition-all"
                                     >
                                         <div className="flex justify-between items-start mb-3">
-                                            <div>
-                                                <h3 className="font-semibold text-gray-900">{item.name}</h3>
-                                                <p className="text-sm text-gray-500">{item.category?.name || 'Uncategorized'}</p>
+                                            <div className="flex-1 min-w-0 mr-2">
+                                                <h3 className="font-semibold text-gray-900 text-sm truncate">{item.name}</h3>
+                                                <p className="text-xs text-gray-400 mt-0.5">{item.category?.name || 'Uncategorized'}</p>
                                             </div>
-                                            <span className="px-2 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs font-medium">
+                                            <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-full text-xs font-medium shrink-0">
                                                 ₱{Number(item.price).toFixed(2)}
                                             </span>
                                         </div>
 
-                                        <div className="mb-3">
+                                        <div className="mb-3 min-h-[36px]">
                                             {item.ingredients && item.ingredients.length > 0 ? (
-                                                <div>
-                                                    <p className="text-xs text-gray-500 mb-2">
-                                                        {item.ingredients.length} ingredient(s) in recipe
-                                                    </p>
-                                                    <div className="flex flex-wrap gap-1">
-                                                        {item.ingredients.slice(0, 3).map((ing, idx) => (
-                                                            <span 
-                                                                key={idx}
-                                                                className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-xs"
-                                                            >
-                                                                {ing.name}
-                                                            </span>
-                                                        ))}
-                                                        {item.ingredients.length > 3 && (
-                                                            <span className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-xs">
-                                                                +{item.ingredients.length - 3} more
-                                                            </span>
-                                                        )}
-                                                    </div>
+                                                <div className="flex flex-wrap gap-1">
+                                                    {item.ingredients.slice(0, 3).map((ing, idx) => (
+                                                        <span
+                                                            key={idx}
+                                                            className="px-2 py-0.5 bg-gray-50 text-gray-500 border border-gray-100 rounded text-xs"
+                                                        >
+                                                            {ing.name}
+                                                        </span>
+                                                    ))}
+                                                    {item.ingredients.length > 3 && (
+                                                        <span className="px-2 py-0.5 bg-gray-50 text-gray-400 border border-gray-100 rounded text-xs">
+                                                            +{item.ingredients.length - 3}
+                                                        </span>
+                                                    )}
                                                 </div>
                                             ) : (
-                                                <div className="flex items-center gap-2 text-amber-600">
-                                                    <AlertTriangle className="h-4 w-4" />
-                                                    <span className="text-sm">No recipe set</span>
+                                                <div className="flex items-center gap-1.5 text-amber-500">
+                                                    <AlertTriangle className="h-3.5 w-3.5" />
+                                                    <span className="text-xs font-medium">No recipe set</span>
                                                 </div>
                                             )}
                                         </div>
 
                                         <button
                                             onClick={() => openRecipeManager(item)}
-                                            className="w-full px-3 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium flex items-center justify-center gap-2"
+                                            className="w-full px-3 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-xs font-medium flex items-center justify-center gap-1.5 transition-colors"
                                         >
-                                            <ChefHat className="h-4 w-4" />
+                                            <ChefHat className="h-3.5 w-3.5" />
                                             {item.ingredients && item.ingredients.length > 0 ? 'Edit Recipe' : 'Add Recipe'}
                                         </button>
                                     </div>
@@ -381,9 +397,9 @@ export default function InventoryIndex({ ingredients: initialIngredients, items,
                             </div>
 
                             {filteredItems.length === 0 && (
-                                <div className="text-center py-12">
-                                    <ChefHat className="h-12 w-12 mx-auto text-gray-300 mb-3" />
-                                    <p className="text-gray-500">
+                                <div className="text-center py-14">
+                                    <ChefHat className="h-10 w-10 mx-auto text-gray-200 mb-3" />
+                                    <p className="text-sm text-gray-400">
                                         {itemSearchTerm ? 'No items match your search' : 'No items found'}
                                     </p>
                                 </div>
@@ -392,70 +408,16 @@ export default function InventoryIndex({ ingredients: initialIngredients, items,
                     )}
 
                     {activeTab === 'purchase-orders' && (
-                        <div className="text-center py-12">
-                            <ShoppingCart className="h-12 w-12 mx-auto text-gray-300 mb-3" />
-                            <h3 className="text-lg font-medium text-gray-900 mb-2">Purchase Orders</h3>
-                            <p className="text-gray-500 mb-4">Manage your purchase orders and supplier deliveries</p>
+                        <div className="text-center py-14">
+                            <ShoppingCart className="h-10 w-10 mx-auto text-gray-200 mb-3" />
+                            <h3 className="text-base font-semibold text-gray-900 mb-1">Purchase Orders</h3>
+                            <p className="text-sm text-gray-400 mb-5">Manage your purchase orders and deliveries</p>
                             <a
-                                href="/admin/inventory/purchase-orders"
-                                className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
+                                href={`/admin/inventory/purchase-orders?pool=${encodeURIComponent(selectedPool)}`}
+                                className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium transition-colors"
                             >
                                 View Purchase Orders
                             </a>
-                        </div>
-                    )}
-
-                    {activeTab === 'suppliers' && (
-                        <div className="text-center py-12">
-                            <Truck className="h-12 w-12 mx-auto text-gray-300 mb-3" />
-                            <h3 className="text-lg font-medium text-gray-900 mb-2">Suppliers</h3>
-                            <p className="text-gray-500 mb-4">Manage your suppliers and contacts</p>
-                            <a
-                                href="/admin/inventory/suppliers"
-                                className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
-                            >
-                                View Suppliers
-                            </a>
-                        </div>
-                    )}
-
-                    {activeTab === 'reports' && (
-                        <div className="space-y-4">
-                            <h2 className="text-lg font-semibold text-gray-900">Inventory Reports</h2>
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                                <a
-                                    href="/admin/inventory/reports/usage"
-                                    className="bg-white rounded-xl p-6 border border-gray-200 hover:border-emerald-300 transition-colors"
-                                >
-                                    <BarChart3 className="h-8 w-8 text-blue-600 mb-3" />
-                                    <h3 className="font-medium text-gray-900">Usage Report</h3>
-                                    <p className="text-sm text-gray-500 mt-1">Track ingredient usage over time</p>
-                                </a>
-                                <a
-                                    href="/admin/inventory/reports/waste"
-                                    className="bg-white rounded-xl p-6 border border-gray-200 hover:border-emerald-300 transition-colors"
-                                >
-                                    <TrendingDown className="h-8 w-8 text-red-600 mb-3" />
-                                    <h3 className="font-medium text-gray-900">Waste Report</h3>
-                                    <p className="text-sm text-gray-500 mt-1">Monitor wasted ingredients</p>
-                                </a>
-                                <a
-                                    href="/admin/inventory/reports/valuation"
-                                    className="bg-white rounded-xl p-6 border border-gray-200 hover:border-emerald-300 transition-colors"
-                                >
-                                    <DollarSign className="h-8 w-8 text-emerald-600 mb-3" />
-                                    <h3 className="font-medium text-gray-900">Stock Valuation</h3>
-                                    <p className="text-sm text-gray-500 mt-1">Current inventory value</p>
-                                </a>
-                                <a
-                                    href="/admin/inventory/reports/forecasting"
-                                    className="bg-white rounded-xl p-6 border border-gray-200 hover:border-emerald-300 transition-colors"
-                                >
-                                    <TrendingUp className="h-8 w-8 text-amber-600 mb-3" />
-                                    <h3 className="font-medium text-gray-900">Forecasting</h3>
-                                    <p className="text-sm text-gray-500 mt-1">Predict future stock needs</p>
-                                </a>
-                            </div>
                         </div>
                     )}
                 </div>
@@ -474,5 +436,6 @@ export default function InventoryIndex({ ingredients: initialIngredients, items,
                 />
             )}
         </div>
+        </AdminLayout>
     );
-}
+}   

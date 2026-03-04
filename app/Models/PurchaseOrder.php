@@ -17,6 +17,7 @@ class PurchaseOrder extends Model
         'expected_delivery',
         'delivery_date',
         'status',
+        'inventory_pool_code',
         'subtotal',
         'tax',
         'total',

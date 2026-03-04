@@ -5,6 +5,9 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Ingredient;
+use App\Models\IngredientStock;
+use App\Models\InventoryPool;
+use App\Models\InventoryTransaction;
 use App\Models\Item;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -16,70 +19,79 @@ class InventoryController extends Controller
     /**
      * Display inventory management page
      */
-    public function index()
+    public function index(Request $request)
     {
-        $ingredients = Ingredient::with('items')->orderBy('name')->get();
+        $poolCode = $this->resolvePoolFromRequest($request, false);
+        $ingredients = $this->serializedIngredients($poolCode, true);
         $items = Item::with('category', 'ingredients')->orderBy('name')->get();
-        
-        // Get items that need recipe setup
+
         $itemsNeedingRecipe = Item::whereDoesntHave('ingredients')->count();
-        
-        // Get low stock ingredients
-        $lowStockIngredients = Ingredient::whereRaw('quantity <= min_stock')->count();
-        
+        $lowStockIngredients = collect($ingredients)
+            ->filter(fn ($ing) => (float) $ing['quantity'] <= (float) $ing['min_stock'])
+            ->count();
+
         return Inertia::render('Admin/Inventory/Index', [
             'ingredients' => $ingredients,
             'items' => $items,
+            'activePool' => $poolCode,
+            'availablePools' => $this->availablePoolsForUser($request),
             'stats' => [
-                'total_ingredients' => $ingredients->count(),
+                'total_ingredients' => count($ingredients),
                 'total_items_with_recipe' => Item::has('ingredients')->count(),
                 'items_needing_recipe' => $itemsNeedingRecipe,
                 'low_stock_ingredients' => $lowStockIngredients,
-            ]
+            ],
         ]);
     }
 
     /**
      * Get ingredients for dropdown (API)
      */
-    public function getIngredients()
+    public function getIngredients(Request $request)
     {
-        $ingredients = Ingredient::orderBy('name')
-            ->get(['id', 'name', 'unit', 'is_dry', 'quantity', 'min_stock', 'cost_per_unit']);
-        
+        $poolCode = $this->resolvePoolFromRequest($request, false);
+        $ingredients = $this->serializedIngredients($poolCode, false);
+
         return response()->json([
             'success' => true,
-            'ingredients' => $ingredients
+            'pool' => $poolCode,
+            'available_pools' => $this->availablePoolsForUser($request),
+            'ingredients' => $ingredients,
         ]);
     }
 
     /**
      * Get items with their recipes (API)
      */
-    public function getItemsWithRecipes()
+    public function getItemsWithRecipes(Request $request)
     {
-        $items = Item::with(['category', 'ingredients' => function($query) {
+        $poolCode = $this->resolvePoolFromRequest($request, false);
+
+        $items = Item::with(['category', 'ingredients' => function ($query) {
             $query->orderBy('name');
         }])->orderBy('name')->get();
-        
+
         return response()->json([
             'success' => true,
-            'items' => $items
+            'pool' => $poolCode,
+            'items' => $items,
         ]);
     }
 
     /**
      * Get recipe for a specific item
      */
-    public function getItemRecipe(Item $item)
+    public function getItemRecipe(Request $request, Item $item)
     {
-        $item->load(['category', 'ingredients' => function($query) {
+        $poolCode = $this->resolvePoolFromRequest($request, false);
+        $item->load(['category', 'ingredients' => function ($query) {
             $query->orderBy('name');
         }]);
-        
+
         return response()->json([
             'success' => true,
-            'item' => $item
+            'pool' => $poolCode,
+            'item' => $item,
         ]);
     }
 
@@ -99,40 +111,34 @@ class InventoryController extends Controller
                 'ingredients.*.notes' => 'nullable|string|max:255',
             ]);
 
-            // Prepare sync data
             $syncData = [];
             foreach ($validated['ingredients'] as $ingredient) {
+                $recipeUnit = $this->sanitizeStockUnit($ingredient['unit'] ?? null);
                 $syncData[$ingredient['id']] = [
                     'quantity_required' => $ingredient['quantity_required'],
-                    'unit' => $ingredient['unit'] ?? null,
+                    'unit' => $recipeUnit !== '' ? $recipeUnit : null,
                     'notes' => $ingredient['notes'] ?? null,
                 ];
             }
 
-            // Sync ingredients
             $item->ingredients()->sync($syncData);
-
-            // Update has_recipe flag
             $item->update(['has_recipe' => true]);
-
             DB::commit();
 
-            // Reload with relationships
             $item->load(['category', 'ingredients']);
 
             return response()->json([
                 'success' => true,
                 'message' => 'Recipe saved successfully!',
-                'item' => $item
+                'item' => $item,
             ]);
-
         } catch (\Exception $e) {
             DB::rollBack();
             Log::error('Failed to save recipe: ' . $e->getMessage());
-            
+
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to save recipe: ' . $e->getMessage()
+                'message' => 'Failed to save recipe: ' . $e->getMessage(),
             ], 500);
         }
     }
@@ -140,31 +146,38 @@ class InventoryController extends Controller
     /**
      * Check if item can be made with current inventory
      */
-    public function checkAvailability(Item $item, $quantity = 1)
+    public function checkAvailability(Request $request, Item $item)
     {
-        $item->load('ingredients');
-        
-        $missingIngredients = [];
+        $poolCode = $this->resolvePoolFromRequest($request, false);
+        $quantity = (float) $request->get('quantity', 1);
+        $item->load('ingredients.stocks.pool');
+
         $insufficientIngredients = [];
-        
+
         foreach ($item->ingredients as $ingredient) {
-            $required = $ingredient->pivot->quantity_required * $quantity;
-            
-            if ($ingredient->quantity < $required) {
+            $requiredRaw = (float) $ingredient->pivot->quantity_required * $quantity;
+            $requiredUnit = (string) ($ingredient->pivot->unit ?? $ingredient->unit ?? '');
+            $stockUnit = (string) ($ingredient->unit ?? '');
+            $required = $this->convertQuantity($requiredRaw, $requiredUnit, $stockUnit) ?? $requiredRaw;
+            $available = $this->availableQuantityForIngredient($ingredient, $poolCode);
+
+            if ($available < $required) {
                 $insufficientIngredients[] = [
                     'name' => $ingredient->name,
                     'required' => $required,
-                    'available' => $ingredient->quantity,
-                    'unit' => $ingredient->unit
+                    'available' => $available,
+                    'unit' => $stockUnit,
+                    'pool' => $poolCode,
                 ];
             }
         }
-        
+
         return response()->json([
             'success' => true,
+            'pool' => $poolCode,
             'available' => count($insufficientIngredients) === 0,
             'insufficient_ingredients' => $insufficientIngredients,
-            'missing_ingredients' => $missingIngredients
+            'missing_ingredients' => [],
         ]);
     }
 
@@ -176,6 +189,7 @@ class InventoryController extends Controller
         try {
             DB::beginTransaction();
 
+            $poolCode = $this->resolvePoolFromRequest($request, true);
             $validated = $request->validate([
                 'ingredients' => 'required|array',
                 'ingredients.*.id' => 'required|exists:ingredients,id',
@@ -184,35 +198,44 @@ class InventoryController extends Controller
             ]);
 
             foreach ($validated['ingredients'] as $data) {
-                $ingredient = Ingredient::find($data['id']);
-                $oldQuantity = $ingredient->quantity;
-                $ingredient->quantity = $data['quantity'];
-                $ingredient->save();
+                $ingredient = Ingredient::findOrFail($data['id']);
+                $stock = $this->findOrCreateStock($ingredient->id, $poolCode);
+                $oldQuantity = (float) $stock->quantity;
+                $newQuantity = (float) $data['quantity'];
+                $delta = $newQuantity - $oldQuantity;
 
-                // Log stock adjustment
-                Log::info('Stock adjusted', [
-                    'ingredient' => $ingredient->name,
-                    'old' => $oldQuantity,
-                    'new' => $data['quantity'],
-                    'notes' => $data['notes'] ?? null,
-                    'user' => auth()->id()
-                ]);
+                $stock->quantity = $newQuantity;
+                $stock->save();
+
+                if (abs($delta) > 0) {
+                    $this->logInventoryTransaction(
+                        $ingredient->id,
+                        $stock->inventory_pool_id,
+                        $delta,
+                        'manual_adjustment',
+                        null,
+                        null,
+                        $data['notes'] ?? null,
+                        ['source' => 'updateStock']
+                    );
+                }
             }
 
             DB::commit();
 
             return response()->json([
                 'success' => true,
-                'message' => 'Stock updated successfully!'
+                'message' => 'Stock updated successfully!',
+                'pool' => $poolCode,
+                'ingredients' => $this->serializedIngredients($poolCode, false),
             ]);
-
         } catch (\Exception $e) {
             DB::rollBack();
             Log::error('Failed to update stock: ' . $e->getMessage());
-            
+
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to update stock: ' . $e->getMessage()
+                'message' => 'Failed to update stock: ' . $e->getMessage(),
             ], 500);
         }
     }
@@ -220,21 +243,29 @@ class InventoryController extends Controller
     /**
      * Get low stock alerts
      */
-    public function getLowStockAlerts()
+    public function getLowStockAlerts(Request $request)
     {
-        $lowStock = Ingredient::whereRaw('quantity <= min_stock')
-            ->orderByRaw('(quantity / min_stock) asc')
-            ->get();
-        
-        $outOfStock = Ingredient::where('quantity', '<=', 0)
-            ->orderBy('name')
-            ->get();
-        
+        $poolCode = $this->resolvePoolFromRequest($request, false);
+        $ingredients = collect($this->serializedIngredients($poolCode, false));
+
+        $lowStock = $ingredients
+            ->filter(fn ($ing) => (float) $ing['quantity'] <= (float) $ing['min_stock'])
+            ->sortBy(function ($ing) {
+                $minStock = max((float) $ing['min_stock'], 0.001);
+                return (float) $ing['quantity'] / $minStock;
+            })
+            ->values();
+
+        $outOfStock = $ingredients
+            ->filter(fn ($ing) => (float) $ing['quantity'] <= 0)
+            ->values();
+
         return response()->json([
             'success' => true,
+            'pool' => $poolCode,
             'low_stock' => $lowStock,
             'out_of_stock' => $outOfStock,
-            'total_alerts' => $lowStock->count() + $outOfStock->count()
+            'total_alerts' => $lowStock->count() + $outOfStock->count(),
         ]);
     }
 
@@ -251,25 +282,21 @@ class InventoryController extends Controller
             $skipped = 0;
 
             foreach ($items as $item) {
-                // Check if item has any ingredient data in old format
                 if (!empty($item->ingredients) && is_string($item->ingredients)) {
-                    // Parse old ingredients string (if exists)
                     $ingredientsList = explode(',', $item->ingredients);
-                    
-                    // Try to match with actual ingredients
+
                     foreach ($ingredientsList as $ingredientName) {
                         $ingredientName = trim($ingredientName);
                         $ingredient = Ingredient::where('name', 'LIKE', "%{$ingredientName}%")->first();
-                        
+
                         if ($ingredient) {
-                            // Add with default quantity (1)
                             $item->ingredients()->attach($ingredient->id, [
                                 'quantity_required' => 1,
-                                'notes' => 'Auto-migrated from old data'
+                                'notes' => 'Auto-migrated from old data',
                             ]);
                         }
                     }
-                    
+
                     $migrated++;
                 } else {
                     $skipped++;
@@ -282,16 +309,15 @@ class InventoryController extends Controller
                 'success' => true,
                 'message' => "Migration complete! {$migrated} items migrated, {$skipped} skipped.",
                 'migrated' => $migrated,
-                'skipped' => $skipped
+                'skipped' => $skipped,
             ]);
-
         } catch (\Exception $e) {
             DB::rollBack();
             Log::error('Migration failed: ' . $e->getMessage());
-            
+
             return response()->json([
                 'success' => false,
-                'message' => 'Migration failed: ' . $e->getMessage()
+                'message' => 'Migration failed: ' . $e->getMessage(),
             ], 500);
         }
     }
@@ -302,36 +328,56 @@ class InventoryController extends Controller
     public function storeIngredient(Request $request)
     {
         try {
+            $poolCode = $this->resolvePoolFromRequest($request, true);
             $validated = $request->validate([
                 'name' => 'required|string|max:255|unique:ingredients,name',
                 'unit' => 'required|string|max:50',
-                'is_dry' => 'required|boolean',
+                'pieces_per_box' => 'nullable|integer|min:1',
+                'is_dry' => 'nullable|boolean',
                 'quantity' => 'required|numeric|min:0',
-                'min_stock' => 'required|numeric|min:0',
-                'cost_per_unit' => 'required|numeric|min:0',
+                'min_stock' => 'nullable|numeric|min:0',
+                'cost_per_unit' => 'nullable|numeric|min:0',
             ]);
 
-            $ingredient = Ingredient::create($validated);
+            DB::beginTransaction();
 
-            Log::info('Ingredient created', [
-                'id' => $ingredient->id,
-                'name' => $ingredient->name,
-                'quantity' => $ingredient->quantity,
-                'user' => auth()->id()
+            $unit = $this->sanitizeStockUnit($validated['unit']);
+            $isDry = array_key_exists('is_dry', $validated)
+                ? (bool) $validated['is_dry']
+                : $this->isDryStockUnit($unit);
+            $quantity = (float) $validated['quantity'];
+            $minStock = (float) ($validated['min_stock'] ?? 0);
+            $costPerUnit = (float) ($validated['cost_per_unit'] ?? 0);
+
+            $ingredient = Ingredient::create([
+                'name' => $validated['name'],
+                'unit' => $unit,
+                'pieces_per_box' => $validated['pieces_per_box'] ?? null,
+                'is_dry' => $isDry,
+                'quantity' => 0,
+                'min_stock' => 0,
+                'cost_per_unit' => $costPerUnit,
             ]);
+
+            $this->initializeStocksForIngredient($ingredient->id, $quantity, $minStock, $costPerUnit, $poolCode);
+            DB::commit();
+
+            $serialized = collect($this->serializedIngredients($poolCode, false))
+                ->firstWhere('id', $ingredient->id);
 
             return response()->json([
                 'success' => true,
                 'message' => 'Ingredient added successfully!',
-                'ingredient' => $ingredient
+                'pool' => $poolCode,
+                'ingredient' => $serialized,
             ]);
-
         } catch (\Exception $e) {
+            DB::rollBack();
             Log::error('Failed to create ingredient: ' . $e->getMessage());
-            
+
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to add ingredient: ' . $e->getMessage()
+                'message' => 'Failed to add ingredient: ' . $e->getMessage(),
             ], 500);
         }
     }
@@ -342,39 +388,82 @@ class InventoryController extends Controller
     public function updateIngredient(Request $request, Ingredient $ingredient)
     {
         try {
+            $poolCode = $this->resolvePoolFromRequest($request, true);
             $validated = $request->validate([
                 'name' => 'required|string|max:255|unique:ingredients,name,' . $ingredient->id,
                 'unit' => 'required|string|max:50',
-                'is_dry' => 'required|boolean',
+                'pieces_per_box' => 'nullable|integer|min:1',
+                'is_dry' => 'nullable|boolean',
                 'quantity' => 'required|numeric|min:0',
-                'min_stock' => 'required|numeric|min:0',
-                'cost_per_unit' => 'required|numeric|min:0',
+                'min_stock' => 'nullable|numeric|min:0',
+                'cost_per_unit' => 'nullable|numeric|min:0',
             ]);
 
+            DB::beginTransaction();
+            $unit = $this->sanitizeStockUnit($validated['unit']);
+            $isDry = array_key_exists('is_dry', $validated)
+                ? (bool) $validated['is_dry']
+                : $this->isDryStockUnit($unit);
+            $stock = $this->findOrCreateStock($ingredient->id, $poolCode, true);
+            $costPerUnit = array_key_exists('cost_per_unit', $validated)
+                ? (float) $validated['cost_per_unit']
+                : (float) ($stock->cost_per_unit ?? $ingredient->cost_per_unit ?? 0);
+            $minStock = array_key_exists('min_stock', $validated)
+                ? (float) $validated['min_stock']
+                : (float) ($stock->min_stock ?? 0);
+            $ingredientData = [
+                'name' => $validated['name'],
+                'unit' => $unit,
+                'is_dry' => $isDry,
+                'cost_per_unit' => $costPerUnit,
+            ];
 
-            $oldQuantity = $ingredient->quantity;
-            $ingredient->update($validated);
+            if (array_key_exists('pieces_per_box', $validated)) {
+                $ingredientData['pieces_per_box'] = $validated['pieces_per_box'];
+            }
 
-            Log::info('Ingredient updated', [
-                'id' => $ingredient->id,
-                'name' => $ingredient->name,
-                'old_quantity' => $oldQuantity,
-                'new_quantity' => $ingredient->quantity,
-                'user' => auth()->id()
+            $ingredient->update($ingredientData);
+            $oldQuantity = (float) $stock->quantity;
+            $newQuantity = (float) $validated['quantity'];
+            $delta = $newQuantity - $oldQuantity;
+
+            $stock->update([
+                'quantity' => $newQuantity,
+                'min_stock' => $minStock,
+                'cost_per_unit' => $costPerUnit,
             ]);
+
+            if (abs($delta) > 0) {
+                $this->logInventoryTransaction(
+                    $ingredient->id,
+                    $stock->inventory_pool_id,
+                    $delta,
+                    'manual_adjustment',
+                    null,
+                    null,
+                    null,
+                    ['source' => 'updateIngredient']
+                );
+            }
+
+            DB::commit();
+
+            $serialized = collect($this->serializedIngredients($poolCode, false))
+                ->firstWhere('id', $ingredient->id);
 
             return response()->json([
                 'success' => true,
                 'message' => 'Ingredient updated successfully!',
-                'ingredient' => $ingredient
+                'pool' => $poolCode,
+                'ingredient' => $serialized,
             ]);
-
         } catch (\Exception $e) {
+            DB::rollBack();
             Log::error('Failed to update ingredient: ' . $e->getMessage());
-            
+
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to update ingredient: ' . $e->getMessage()
+                'message' => 'Failed to update ingredient: ' . $e->getMessage(),
             ], 500);
         }
     }
@@ -382,33 +471,34 @@ class InventoryController extends Controller
     /**
      * Delete an ingredient
      */
-    public function deleteIngredient(Ingredient $ingredient)
+    public function deleteIngredient(Request $request, Ingredient $ingredient)
     {
         try {
+            $this->resolvePoolFromRequest($request, true);
+            $role = strtolower((string) optional($request->user())->role);
+            if (!in_array($role, ['admin', 'resto_admin'], true)) {
+                abort(403, 'Only admin accounts can delete ingredients.');
+            }
+
             $ingredientName = $ingredient->name;
-            
-            // Remove ingredient associations with items
             $ingredient->items()->detach();
-            
-            // Delete the ingredient
             $ingredient->delete();
 
             Log::info('Ingredient deleted', [
                 'name' => $ingredientName,
-                'user' => auth()->id()
+                'user' => auth()->id(),
             ]);
 
             return response()->json([
                 'success' => true,
-                'message' => 'Ingredient deleted successfully!'
+                'message' => 'Ingredient deleted successfully!',
             ]);
-
         } catch (\Exception $e) {
             Log::error('Failed to delete ingredient: ' . $e->getMessage());
-            
+
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to delete ingredient: ' . $e->getMessage()
+                'message' => 'Failed to delete ingredient: ' . $e->getMessage(),
             ], 500);
         }
     }
@@ -421,28 +511,34 @@ class InventoryController extends Controller
         try {
             DB::beginTransaction();
 
+            $poolCode = $this->resolvePoolFromRequest($request, true);
             $validated = $request->validate([
                 'updates' => 'required|array',
                 'updates.*.id' => 'required|exists:ingredients,id',
                 'updates.*.quantity' => 'required|numeric|min:0',
             ]);
 
-            $updatedIngredients = [];
-
             foreach ($validated['updates'] as $update) {
-                $ingredient = Ingredient::find($update['id']);
-                $oldQuantity = $ingredient->quantity;
-                $ingredient->quantity = $update['quantity'];
-                $ingredient->save();
+                $stock = $this->findOrCreateStock((int) $update['id'], $poolCode, true);
+                $oldQuantity = (float) $stock->quantity;
+                $newQuantity = (float) $update['quantity'];
+                $delta = $newQuantity - $oldQuantity;
 
-                Log::info('Stock bulk updated', [
-                    'ingredient' => $ingredient->name,
-                    'old_quantity' => $oldQuantity,
-                    'new_quantity' => $ingredient->quantity,
-                    'user' => auth()->id()
-                ]);
+                $stock->quantity = $newQuantity;
+                $stock->save();
 
-                $updatedIngredients[] = $ingredient;
+                if (abs($delta) > 0) {
+                    $this->logInventoryTransaction(
+                        (int) $update['id'],
+                        $stock->inventory_pool_id,
+                        $delta,
+                        'manual_adjustment',
+                        null,
+                        null,
+                        null,
+                        ['source' => 'bulkUpdateStock']
+                    );
+                }
             }
 
             DB::commit();
@@ -450,17 +546,248 @@ class InventoryController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'Stock updated successfully!',
-                'ingredients' => $updatedIngredients
+                'pool' => $poolCode,
+                'ingredients' => $this->serializedIngredients($poolCode, false),
             ]);
-
         } catch (\Exception $e) {
             DB::rollBack();
             Log::error('Failed to bulk update stock: ' . $e->getMessage());
-            
+
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to update stock: ' . $e->getMessage()
+                'message' => 'Failed to update stock: ' . $e->getMessage(),
             ], 500);
         }
+    }
+
+    private function availablePoolsForUser(Request $request): array
+    {
+        $role = strtolower((string) optional($request->user())->role);
+
+        if (in_array($role, ['admin', 'resto_admin'], true)) {
+            return ['resto', 'kitchen', 'combined'];
+        }
+
+        if ($role === 'kitchen') {
+            return ['kitchen'];
+        }
+
+        return ['resto'];
+    }
+
+    private function resolvePoolFromRequest(Request $request, bool $mutating): string
+    {
+        $requestedPool = strtolower((string) ($request->input('pool') ?? $request->query('pool') ?? ''));
+        $allowedPools = $this->availablePoolsForUser($request);
+        $defaultPool = $allowedPools[0] ?? InventoryPool::RESTO;
+        $poolCode = $requestedPool !== '' ? $requestedPool : $defaultPool;
+
+        if (!in_array($poolCode, $allowedPools, true)) {
+            abort(403, "Pool '{$poolCode}' is not allowed for this account.");
+        }
+
+        if ($mutating && $poolCode === 'combined') {
+            abort(422, 'Combined pool is read-only.');
+        }
+
+        return $poolCode;
+    }
+
+    private function serializedIngredients(string $poolCode, bool $withItems): array
+    {
+        $ingredients = Ingredient::query()
+            ->when($withItems, fn ($query) => $query->with('items'))
+            ->with(['stocks.pool'])
+            ->orderBy('name')
+            ->get();
+
+        return $ingredients->map(function (Ingredient $ingredient) use ($poolCode) {
+            $stocks = $ingredient->stocks;
+            $stock = null;
+
+            if ($poolCode !== 'combined') {
+                $stock = $stocks->first(fn ($s) => optional($s->pool)->code === $poolCode);
+            }
+
+            $quantity = $poolCode === 'combined'
+                ? (float) $stocks->sum('quantity')
+                : (float) optional($stock)->quantity;
+            $minStock = $poolCode === 'combined'
+                ? (float) $stocks->sum('min_stock')
+                : (float) optional($stock)->min_stock;
+            $costPerUnit = $poolCode === 'combined'
+                ? (float) ($stocks->avg('cost_per_unit') ?? $ingredient->cost_per_unit)
+                : (float) (optional($stock)->cost_per_unit ?? $ingredient->cost_per_unit);
+
+            return [
+                'id' => $ingredient->id,
+                'name' => $ingredient->name,
+                'unit' => $ingredient->unit,
+                'is_dry' => (bool) $ingredient->is_dry,
+                'quantity' => $quantity,
+                'min_stock' => $minStock,
+                'cost_per_unit' => $costPerUnit,
+                'pool' => $poolCode,
+            ];
+        })->values()->all();
+    }
+
+    private function availableQuantityForIngredient(Ingredient $ingredient, string $poolCode): float
+    {
+        if ($poolCode === 'combined') {
+            return (float) $ingredient->stocks->sum('quantity');
+        }
+
+        return (float) optional(
+            $ingredient->stocks->first(fn ($stock) => optional($stock->pool)->code === $poolCode)
+        )->quantity;
+    }
+
+    private function convertQuantity(float $quantity, ?string $fromUnit, ?string $toUnit): ?float
+    {
+        $from = $this->normalizeUnit($fromUnit);
+        $to = $this->normalizeUnit($toUnit);
+
+        if ($from === '' || $to === '' || $from === $to) {
+            return $quantity;
+        }
+
+        if ($from === 'g' && $to === 'kg') {
+            return $quantity / 1000;
+        }
+
+        if ($from === 'kg' && $to === 'g') {
+            return $quantity * 1000;
+        }
+
+        if ($from === 'ml' && $to === 'l') {
+            return $quantity / 1000;
+        }
+
+        if ($from === 'l' && $to === 'ml') {
+            return $quantity * 1000;
+        }
+
+        return null;
+    }
+
+    private function normalizeUnit(?string $unit): string
+    {
+        $normalized = strtolower(trim((string) $unit));
+
+        return match ($normalized) {
+            'gram', 'grams', 'gm', 'gms' => 'g',
+            'kilogram', 'kilograms', 'kgs' => 'kg',
+            'liter', 'litre', 'liters', 'litres', 'ltr', 'ltrs' => 'l',
+            'milliliter', 'millilitre', 'milliliters', 'millilitres', 'mls' => 'ml',
+            'pack', 'packs', 'boxes' => 'box',
+            'pcs', 'pc', 'piece', 'pieces' => 'piece',
+            default => $normalized,
+        };
+    }
+
+    private function findOrCreateStock(int $ingredientId, string $poolCode, bool $lockForUpdate = false): IngredientStock
+    {
+        $poolId = InventoryPool::where('code', $poolCode)->value('id');
+        $query = IngredientStock::where('ingredient_id', $ingredientId)
+            ->where('inventory_pool_id', $poolId);
+
+        if ($lockForUpdate) {
+            $query->lockForUpdate();
+        }
+
+        $stock = $query->first();
+        if ($stock) {
+            return $stock;
+        }
+
+        return IngredientStock::create([
+            'ingredient_id' => $ingredientId,
+            'inventory_pool_id' => $poolId,
+            'quantity' => 0,
+            'min_stock' => 0,
+            'cost_per_unit' => 0,
+        ]);
+    }
+
+    private function initializeStocksForIngredient(
+        int $ingredientId,
+        float $quantity,
+        float $minStock,
+        float $cost,
+        string $targetPoolCode
+    ): void
+    {
+        $pools = InventoryPool::all();
+
+        foreach ($pools as $pool) {
+            $isTarget = $pool->code === $targetPoolCode;
+            $poolQuantity = $isTarget ? $quantity : 0;
+            $poolMinStock = $isTarget ? $minStock : 0;
+
+            $stock = IngredientStock::create([
+                'ingredient_id' => $ingredientId,
+                'inventory_pool_id' => $pool->id,
+                'quantity' => $poolQuantity,
+                'min_stock' => $poolMinStock,
+                'cost_per_unit' => $cost,
+            ]);
+
+            if ($poolQuantity > 0) {
+                $this->logInventoryTransaction(
+                    $ingredientId,
+                    $stock->inventory_pool_id,
+                    $poolQuantity,
+                    'manual_adjustment',
+                    null,
+                    null,
+                    'Initial stock on ingredient creation',
+                    ['source' => 'storeIngredient']
+                );
+            }
+        }
+    }
+
+    private function sanitizeStockUnit(?string $unit): string
+    {
+        $normalized = strtolower(trim((string) $unit));
+
+        return match ($normalized) {
+            'kilogram', 'kilograms', 'kgs' => 'kg',
+            'gram', 'grams', 'gm', 'gms' => 'g',
+            'liter', 'litre', 'liters', 'litres', 'ltr', 'ltrs' => 'l',
+            'milliliter', 'millilitre', 'milliliters', 'millilitres', 'mls' => 'ml',
+            'pack', 'packs', 'boxes' => 'box',
+            'pc', 'piece', 'pieces' => 'pcs',
+            default => $normalized,
+        };
+    }
+
+    private function isDryStockUnit(string $unit): bool
+    {
+        return !in_array(strtolower(trim($unit)), ['ml', 'l'], true);
+    }
+
+    private function logInventoryTransaction(
+        int $ingredientId,
+        int $poolId,
+        float $delta,
+        string $reason,
+        ?string $referenceType = null,
+        ?int $referenceId = null,
+        ?string $notes = null,
+        array $meta = []
+    ): void {
+        InventoryTransaction::create([
+            'ingredient_id' => $ingredientId,
+            'inventory_pool_id' => $poolId,
+            'quantity_delta' => $delta,
+            'reason' => $reason,
+            'reference_type' => $referenceType,
+            'reference_id' => $referenceId,
+            'user_id' => auth()->id(),
+            'notes' => $notes,
+            'meta' => $meta,
+        ]);
     }
 }

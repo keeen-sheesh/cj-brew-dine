@@ -16,6 +16,17 @@ class CheckRole
         if (!$user) {
             return redirect()->route('login');
         }
+
+        if (! $user->is_active) {
+            Auth::guard('web')->logout();
+            $request->session()->invalidate();
+            $request->session()->regenerateToken();
+
+            return redirect()->route('login')
+                ->withErrors([
+                    'email' => 'Your account is deactivated. Contact an administrator to reactivate it.',
+                ]);
+        }
         
         // DEBUG: log roles passed to middleware
         \Log::info('CheckRole middleware', [
@@ -32,12 +43,12 @@ class CheckRole
         }
         
         // If no role matches, redirect based on user role
-        if ($user->isAdmin()) {
+        if ($user->isAdmin() || $user->isRestoAdmin()) {
             return redirect()->route('admin.dashboard');
         } elseif ($user->isKitchen()) {
-            return redirect('/kitchen');
-        } elseif ($user->isResto() || $user->isRestoAdmin()) {
-            return redirect('/cashier');
+            return redirect('/admin/kitchen');
+        } elseif ($user->isResto() || $user->hasRole('cashier')) {
+            return redirect('/cashier/dashboard');
         } else {
             return redirect('/menu');
         }

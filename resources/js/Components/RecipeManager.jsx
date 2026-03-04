@@ -34,7 +34,18 @@ export default function RecipeManager({
 
     // Unit conversion helpers
     const dryUnits = ['kg', 'g'];
-    const wetUnits = ['L', 'mL'];
+    const wetUnits = ['l', 'ml'];
+
+    const normalizeStockUnit = (unit) => {
+        const value = String(unit || '').trim().toLowerCase();
+        if (['kilogram', 'kilograms', 'kgs'].includes(value)) return 'kg';
+        if (['gram', 'grams', 'gm', 'gms'].includes(value)) return 'g';
+        if (['liter', 'litre', 'liters', 'litres', 'ltr', 'ltrs'].includes(value)) return 'l';
+        if (['milliliter', 'millilitre', 'milliliters', 'millilitres', 'mls'].includes(value)) return 'ml';
+        if (['pack', 'packs', 'box', 'boxes'].includes(value)) return 'box';
+        if (['pcs', 'pc', 'piece', 'pieces'].includes(value)) return 'pcs';
+        return value;
+    };
     
     const isDryUnit = (unit) => dryUnits.includes(unit?.toLowerCase());
     const isWetUnit = (unit) => wetUnits.includes(unit?.toLowerCase());
@@ -74,10 +85,9 @@ export default function RecipeManager({
             return [
                 { value: 'kg', label: 'kg (kilogram)' },
                 { value: 'g', label: 'g (gram)' },
-                { value: 'L', label: 'L (liter)' },
-                { value: 'mL', label: 'mL (milliliter)' },
-                { value: 'piece', label: 'piece' },
-                { value: 'pack', label: 'pack' },
+                { value: 'l', label: 'l (liter)' },
+                { value: 'ml', label: 'ml (milliliter)' },
+                { value: 'pcs', label: 'pcs' },
                 { value: 'box', label: 'box' }
             ];
         }
@@ -86,16 +96,14 @@ export default function RecipeManager({
             return [
                 { value: 'kg', label: 'kg (kilogram)' },
                 { value: 'g', label: 'g (gram)' },
-                { value: 'piece', label: 'piece' },
-                { value: 'pack', label: 'pack' },
+                { value: 'pcs', label: 'pcs' },
                 { value: 'box', label: 'box' }
             ];
         } else {
             return [
-                { value: 'L', label: 'L (liter)' },
-                { value: 'mL', label: 'mL (milliliter)' },
-                { value: 'piece', label: 'piece' },
-                { value: 'pack', label: 'pack' },
+                { value: 'l', label: 'l (liter)' },
+                { value: 'ml', label: 'ml (milliliter)' },
+                { value: 'pcs', label: 'pcs' },
                 { value: 'box', label: 'box' }
             ];
         }
@@ -136,7 +144,7 @@ export default function RecipeManager({
     // Handle ingredient selection from search
     const handleSelectIngredient = (ing) => {
         setSelectedIngredient(ing);
-        setUnit(ing.unit); // Auto-fill with ingredient's default unit
+        setUnit(normalizeStockUnit(ing.unit)); // Auto-fill with ingredient's default unit
         setQuantity('1'); // Set default quantity to 1
         setNotes(''); // Reset notes
         setSearchTerm(''); // Clear search
@@ -156,16 +164,16 @@ export default function RecipeManager({
         }
 
         // Validate unit compatibility
-        const inputUnit = unit || selectedIngredient.unit;
+        const inputUnit = normalizeStockUnit(unit || selectedIngredient.unit);
         if (!isCompatibleUnit(selectedIngredient, inputUnit)) {
             const type = selectedIngredient.is_dry ? 'dry' : 'wet';
-            const allowedUnits = selectedIngredient.is_dry ? 'kg, g' : 'L, mL';
+            const allowedUnits = selectedIngredient.is_dry ? 'kg, g' : 'l, ml';
             setErrors({ unit: `Invalid unit for ${type} ingredient. Use: ${allowedUnits}` });
             return;
         }
 
         // Convert quantity to base unit if needed
-        const baseUnit = selectedIngredient.unit;
+        const baseUnit = normalizeStockUnit(selectedIngredient.unit);
         const inputQuantity = parseFloat(quantity);
         const convertedQuantity = convertToBaseUnit(inputQuantity, inputUnit, baseUnit);
 

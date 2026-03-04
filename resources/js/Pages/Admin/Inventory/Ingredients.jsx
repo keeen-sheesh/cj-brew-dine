@@ -9,19 +9,34 @@ import {
     AlertTriangle,
     CheckCircle,
     XCircle,
-    DollarSign,
-    Scale,
     TrendingDown,
     Loader2,
     X,
     Save,
-    Filter,
-    RefreshCw,
     Download,
     Upload
 } from 'lucide-react';
 
-export default function Ingredients({ ingredients: initialIngredients = [], onUpdate }) {
+export default function Ingredients({
+    ingredients: initialIngredients = [],
+    onUpdate,
+    pool = 'resto',
+    canManage = true
+}) {
+    const STOCK_UNITS = ['kg', 'g', 'ml', 'l', 'box', 'pcs'];
+
+    const normalizeUnitForForm = (unit) => {
+        const value = String(unit || '').trim().toLowerCase();
+
+        if (['l', 'liter', 'litre', 'liters', 'litres', 'ltr', 'ltrs'].includes(value)) return 'l';
+        if (['ml', 'milliliter', 'millilitre', 'milliliters', 'millilitres', 'mls'].includes(value)) return 'ml';
+        if (['pcs', 'pc', 'piece', 'pieces'].includes(value)) return 'pcs';
+        if (value === 'pack') return 'box';
+        if (value === 'kg' || value === 'g' || value === 'box') return value;
+
+        return 'kg';
+    };
+
     const [ingredients, setIngredients] = useState(initialIngredients);
     const [searchTerm, setSearchTerm] = useState('');
     const [showAddModal, setShowAddModal] = useState(false);
@@ -36,36 +51,8 @@ export default function Ingredients({ ingredients: initialIngredients = [], onUp
     const [formData, setFormData] = useState({
         name: '',
         unit: 'kg',
-        is_dry: true,
-        quantity: 0,
-        min_stock: 1,
-        cost_per_unit: 0
+        quantity: 0
     });
-
-    // Unit options based on dry/wet
-    const dryUnits = [
-        { value: 'kg', label: 'kg (kilogram)' },
-        { value: 'g', label: 'g (gram)' }
-    ];
-
-    const wetUnits = [
-        { value: 'L', label: 'L (liter)' },
-        { value: 'mL', label: 'mL (milliliter)' }
-    ];
-
-    const otherUnits = [
-        { value: 'piece', label: 'piece' },
-        { value: 'pack', label: 'pack' },
-        { value: 'box', label: 'box' }
-    ];
-
-    const getUnitOptions = () => {
-        if (formData.is_dry) {
-            return [...dryUnits, ...otherUnits];
-        } else {
-            return [...wetUnits, ...otherUnits];
-        }
-    };
 
 
     // Bulk update state
@@ -73,9 +60,12 @@ export default function Ingredients({ ingredients: initialIngredients = [], onUp
 
     // Filter ingredients
     const filteredIngredients = ingredients.filter(ing =>
-        ing.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        ing.unit.toLowerCase().includes(searchTerm.toLowerCase())
+        ing.name.toLowerCase().includes(searchTerm.toLowerCase())
     );
+
+    useEffect(() => {
+        setIngredients(initialIngredients);
+    }, [initialIngredients]);
 
     // Low stock ingredients
     const lowStockIngredients = ingredients.filter(ing => 
@@ -108,7 +98,12 @@ export default function Ingredients({ ingredients: initialIngredients = [], onUp
                     'X-CSRF-TOKEN': getCsrfToken(),
                     'Accept': 'application/json'
                 },
-                body: JSON.stringify(formData)
+                body: JSON.stringify({
+                    name: formData.name,
+                    unit: formData.unit,
+                    quantity: formData.quantity,
+                    pool
+                })
             });
 
             const data = await response.json();
@@ -116,8 +111,9 @@ export default function Ingredients({ ingredients: initialIngredients = [], onUp
             if (data.success) {
                 setIngredients([...ingredients, data.ingredient]);
                 setShowAddModal(false);
-                setFormData({ name: '', unit: 'kg', quantity: 0, min_stock: 1, cost_per_unit: 0 });
+                setFormData({ name: '', unit: 'kg', quantity: 0 });
                 showNotification('Ingredient added successfully');
+                onUpdate && onUpdate();
             } else {
                 showNotification(data.message || 'Failed to add ingredient', 'error');
             }
@@ -141,7 +137,12 @@ export default function Ingredients({ ingredients: initialIngredients = [], onUp
                     'X-CSRF-TOKEN': getCsrfToken(),
                     'Accept': 'application/json'
                 },
-                body: JSON.stringify(formData)
+                body: JSON.stringify({
+                    name: formData.name,
+                    unit: formData.unit,
+                    quantity: formData.quantity,
+                    pool
+                })
             });
 
             const data = await response.json();
@@ -152,6 +153,7 @@ export default function Ingredients({ ingredients: initialIngredients = [], onUp
                 ));
                 setShowEditModal(false);
                 showNotification('Ingredient updated successfully');
+                onUpdate && onUpdate();
             } else {
                 showNotification(data.message || 'Failed to update ingredient', 'error');
             }
@@ -167,7 +169,7 @@ export default function Ingredients({ ingredients: initialIngredients = [], onUp
         setIsLoading(true);
 
         try {
-            const response = await fetch(`/admin/inventory/ingredients/${selectedIngredient.id}`, {
+            const response = await fetch(`/admin/inventory/ingredients/${selectedIngredient.id}?pool=${encodeURIComponent(pool)}`, {
                 method: 'DELETE',
                 headers: {
                     'X-CSRF-TOKEN': getCsrfToken(),
@@ -181,6 +183,7 @@ export default function Ingredients({ ingredients: initialIngredients = [], onUp
                 setIngredients(ingredients.filter(ing => ing.id !== selectedIngredient.id));
                 setShowDeleteModal(false);
                 showNotification('Ingredient deleted successfully');
+                onUpdate && onUpdate();
             } else {
                 showNotification(data.message || 'Failed to delete ingredient', 'error');
             }
@@ -203,7 +206,10 @@ export default function Ingredients({ ingredients: initialIngredients = [], onUp
                     'X-CSRF-TOKEN': getCsrfToken(),
                     'Accept': 'application/json'
                 },
-                body: JSON.stringify({ updates: bulkUpdates })
+                body: JSON.stringify({
+                    pool,
+                    updates: bulkUpdates
+                })
             });
 
             const data = await response.json();
@@ -213,6 +219,7 @@ export default function Ingredients({ ingredients: initialIngredients = [], onUp
                 setShowBulkModal(false);
                 setBulkUpdates([]);
                 showNotification('Stock updated successfully');
+                onUpdate && onUpdate();
             } else {
                 showNotification(data.message || 'Failed to update stock', 'error');
             }
@@ -226,15 +233,11 @@ export default function Ingredients({ ingredients: initialIngredients = [], onUp
     // Export ingredients
     const exportIngredients = () => {
         const csv = [
-            ['Name', 'Unit', 'Current Stock', 'Min Stock', 'Cost/Unit', 'Total Value'],
+            ['Name', 'Total Value'],
             ...ingredients.map(ing => {
                 const costPerUnit = Number(ing.cost_per_unit) || 0;
                 return [
                     ing.name,
-                    ing.unit,
-                    ing.quantity,
-                    ing.min_stock,
-                    costPerUnit.toFixed(2),
                     (ing.quantity * costPerUnit).toFixed(2)
                 ];
             })
@@ -274,8 +277,13 @@ export default function Ingredients({ ingredients: initialIngredients = [], onUp
                         Ingredient Inventory
                     </h2>
                     <p className="text-sm text-gray-500 mt-1">
-                        Manage your raw ingredients and stock levels
+                        Manage your raw ingredients and stock levels ({pool.toUpperCase()} pool)
                     </p>
+                    {!canManage && (
+                        <p className="text-sm text-amber-700 mt-2">
+                            Combined view is read-only. Switch to a specific pool to edit stock.
+                        </p>
+                    )}
                 </div>
                 <div className="flex gap-2">
                     <button
@@ -287,6 +295,7 @@ export default function Ingredients({ ingredients: initialIngredients = [], onUp
                     </button>
                     <button
                         onClick={() => setShowBulkModal(true)}
+                        disabled={!canManage}
                         className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2"
                     >
                         <Upload className="h-4 w-4" />
@@ -294,6 +303,7 @@ export default function Ingredients({ ingredients: initialIngredients = [], onUp
                     </button>
                     <button
                         onClick={() => setShowAddModal(true)}
+                        disabled={!canManage}
                         className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 flex items-center gap-2"
                     >
                         <Plus className="h-4 w-4" />
@@ -351,7 +361,7 @@ export default function Ingredients({ ingredients: initialIngredients = [], onUp
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
                             onKeyPress={(e) => e.key === 'Enter' && setSearchTerm(searchTerm)}
-                            placeholder="Search ingredients by name or unit..."
+                            placeholder="Search ingredients by name..."
                             className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500"
                         />
                     </div>
@@ -388,18 +398,6 @@ export default function Ingredients({ ingredients: initialIngredients = [], onUp
                                 Ingredient
                             </th>
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                Unit
-                            </th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                Current Stock
-                            </th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                Min Stock
-                            </th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                Cost/Unit
-                            </th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                                 Total Value
                             </th>
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -422,17 +420,6 @@ export default function Ingredients({ ingredients: initialIngredients = [], onUp
                                     <td className="px-6 py-4">
                                         <div className="font-medium text-gray-900">{ingredient.name}</div>
                                     </td>
-                                    <td className="px-6 py-4 text-gray-600">{ingredient.unit}</td>
-                                    <td className="px-6 py-4">
-                                        <span className={`font-medium ${
-                                            isOutOfStock ? 'text-red-600' :
-                                            isLowStock ? 'text-amber-600' : 'text-gray-900'
-                                        }`}>
-                                            {ingredient.quantity}
-                                        </span>
-                                    </td>
-                                    <td className="px-6 py-4 text-gray-600">{ingredient.min_stock}</td>
-                                    <td className="px-6 py-4 text-gray-600">₱{costPerUnit.toFixed(2)}</td>
                                     <td className="px-6 py-4 font-medium text-gray-900">₱{totalValue.toFixed(2)}</td>
                                     <td className="px-6 py-4">
                                         {isOutOfStock ? (
@@ -450,25 +437,34 @@ export default function Ingredients({ ingredients: initialIngredients = [], onUp
                                         )}
                                     </td>
                                     <td className="px-6 py-4 text-right">
-                                        <button
-                                            onClick={() => {
-                                                setSelectedIngredient(ingredient);
-                                                setFormData(ingredient);
-                                                setShowEditModal(true);
-                                            }}
-                                            className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg mr-2"
-                                        >
-                                            <Edit className="h-4 w-4" />
-                                        </button>
-                                        <button
-                                            onClick={() => {
-                                                setSelectedIngredient(ingredient);
-                                                setShowDeleteModal(true);
-                                            }}
-                                            className="p-2 text-red-600 hover:bg-red-50 rounded-lg"
-                                        >
-                                            <Trash2 className="h-4 w-4" />
-                                        </button>
+                                        {canManage && (
+                                            <>
+                                                <button
+                                                    onClick={() => {
+                                                        const unit = normalizeUnitForForm(ingredient.unit);
+                                                        setSelectedIngredient(ingredient);
+                                                        setFormData({
+                                                            name: ingredient.name || '',
+                                                            unit,
+                                                            quantity: Number(ingredient.quantity) || 0
+                                                        });
+                                                        setShowEditModal(true);
+                                                    }}
+                                                    className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg mr-2"
+                                                >
+                                                    <Edit className="h-4 w-4" />
+                                                </button>
+                                                <button
+                                                    onClick={() => {
+                                                        setSelectedIngredient(ingredient);
+                                                        setShowDeleteModal(true);
+                                                    }}
+                                                    className="p-2 text-red-600 hover:bg-red-50 rounded-lg"
+                                                >
+                                                    <Trash2 className="h-4 w-4" />
+                                                </button>
+                                            </>
+                                        )}
                                     </td>
                                 </tr>
                             );
@@ -485,7 +481,7 @@ export default function Ingredients({ ingredients: initialIngredients = [], onUp
             </div>
 
             {/* Add/Edit Modal */}
-            {(showAddModal || showEditModal) && (
+            {(showAddModal || showEditModal) && canManage && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
                     <div className="bg-white rounded-xl shadow-2xl max-w-md w-full">
                         <div className="p-6 border-b border-gray-200">
@@ -508,73 +504,6 @@ export default function Ingredients({ ingredients: initialIngredients = [], onUp
                                     />
                                 </div>
 
-                                {/* Dry/Wet Toggle */}
-                                <div className="col-span-2">
-                                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                                        Ingredient Type *
-                                    </label>
-                                    <div className="flex bg-gray-100 rounded-lg p-1">
-                                        <button
-                                            type="button"
-                                            onClick={() => setFormData({...formData, is_dry: true, unit: 'kg'})}
-                                            className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-all ${
-                                                formData.is_dry 
-                                                    ? 'bg-white text-emerald-700 shadow-sm' 
-                                                    : 'text-gray-600 hover:text-gray-900'
-                                            }`}
-                                        >
-                                            Dry (kg, g)
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={() => setFormData({...formData, is_dry: false, unit: 'L'})}
-                                            className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-all ${
-                                                !formData.is_dry 
-                                                    ? 'bg-white text-blue-700 shadow-sm' 
-                                                    : 'text-gray-600 hover:text-gray-900'
-                                            }`}
-                                        >
-                                            Wet (L, mL)
-                                        </button>
-                                    </div>
-                                </div>
-
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                                            Unit *
-                                        </label>
-                                        <select
-                                            value={formData.unit}
-                                            onChange={(e) => setFormData({...formData, unit: e.target.value})}
-                                            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500"
-                                            required
-                                        >
-                                            {getUnitOptions().map(option => (
-                                                <option key={option.value} value={option.value}>
-                                                    {option.label}
-                                                </option>
-                                            ))}
-                                        </select>
-                                    </div>
-
-
-                                    <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                                            Cost per Unit (₱) *
-                                        </label>
-                                        <input
-                                            type="number"
-                                            step="0.01"
-                                            min="0"
-                                            value={formData.cost_per_unit}
-                                            onChange={(e) => setFormData({...formData, cost_per_unit: parseFloat(e.target.value)})}
-                                            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500"
-                                            required
-                                        />
-                                    </div>
-                                </div>
-
                                 <div className="grid grid-cols-2 gap-4">
                                     <div>
                                         <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -584,26 +513,31 @@ export default function Ingredients({ ingredients: initialIngredients = [], onUp
                                             type="number"
                                             step="0.001"
                                             min="0"
-                                            value={formData.quantity}
-                                            onChange={(e) => setFormData({...formData, quantity: parseFloat(e.target.value)})}
+                                            value={formData.quantity || 0}
+                                            onChange={(e) => setFormData({...formData, quantity: e.target.value ? parseFloat(e.target.value) : 0})}
                                             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500"
                                             required
                                         />
                                     </div>
-
                                     <div>
                                         <label className="block text-sm font-medium text-gray-700 mb-1">
-                                            Min Stock Alert *
+                                            Stock Unit *
                                         </label>
-                                        <input
-                                            type="number"
-                                            step="0.001"
-                                            min="0"
-                                            value={formData.min_stock}
-                                            onChange={(e) => setFormData({...formData, min_stock: parseFloat(e.target.value)})}
+                                        <select
+                                            value={formData.unit}
+                                            onChange={(e) => setFormData({
+                                                ...formData,
+                                                unit: e.target.value
+                                            })}
                                             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500"
                                             required
-                                        />
+                                        >
+                                            {STOCK_UNITS.map((unit) => (
+                                                <option key={`stock-${unit}`} value={unit}>
+                                                    {unit}
+                                                </option>
+                                            ))}
+                                        </select>
                                     </div>
                                 </div>
                             </div>
@@ -614,7 +548,7 @@ export default function Ingredients({ ingredients: initialIngredients = [], onUp
                                     onClick={() => {
                                         setShowAddModal(false);
                                         setShowEditModal(false);
-                                    setFormData({ name: '', unit: 'kg', is_dry: true, quantity: 0, min_stock: 1, cost_per_unit: 0 });
+                                    setFormData({ name: '', unit: 'kg', quantity: 0 });
 
                                     }}
                                     className="px-4 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200"
@@ -640,7 +574,7 @@ export default function Ingredients({ ingredients: initialIngredients = [], onUp
             )}
 
             {/* Delete Confirmation Modal */}
-            {showDeleteModal && (
+            {showDeleteModal && canManage && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
                     <div className="bg-white rounded-xl shadow-2xl max-w-md w-full">
                         <div className="p-6">
@@ -683,7 +617,7 @@ export default function Ingredients({ ingredients: initialIngredients = [], onUp
             )}
 
             {/* Bulk Update Modal */}
-            {showBulkModal && (
+            {showBulkModal && canManage && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
                     <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[80vh] overflow-y-auto">
                         <div className="p-6 border-b border-gray-200">

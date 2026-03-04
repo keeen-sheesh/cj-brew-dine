@@ -37,6 +37,11 @@ class AuthenticatedSessionController extends Controller
         $request->session()->forget('url.intended');
 
         $user = Auth::user();
+
+        $user->forceFill([
+            'last_login_at' => now(),
+            'is_active' => true,
+        ])->save();
         
         // DEBUG: Add logging to see what's happening
         \Log::info('=== LOGIN SUCCESS ===', [
@@ -49,14 +54,14 @@ class AuthenticatedSessionController extends Controller
         ]);
         
         // SIMPLE REDIRECT - Debug version
-        if ($user->role === 'admin') {
-            \Log::info('Redirecting to admin dashboard');
+        if ($user->role === 'admin' || $user->role === 'resto_admin') {
+            \Log::info('Redirecting to manager dashboard');
             return redirect()->route('admin.dashboard');
         }
         
-        if ($user->role === 'resto' || $user->role === 'resto_admin') {
-            \Log::info('Redirecting to cashier');
-            return redirect('/cashier/pos');
+        if ($user->role === 'resto' || $user->role === 'cashier') {
+            \Log::info('Redirecting to cashier dashboard');
+            return redirect('/cashier/dashboard');
         }
         
         if ($user->role === 'kitchen') {

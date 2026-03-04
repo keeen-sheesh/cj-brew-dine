@@ -15,6 +15,7 @@ class Item extends Model
         'description',
         'price',
         'category_id',
+        'inventory_pool_code',
         'is_available',
         'is_featured',
         'stock_quantity',
@@ -36,6 +37,7 @@ class Item extends Model
         'price' => 'decimal:2',
         'price_solo' => 'decimal:2',
         'price_whole' => 'decimal:2',
+        'inventory_pool_code' => 'string',
         'stock_quantity' => 'integer',
         'low_stock_threshold' => 'integer',
         'sort_order' => 'integer'

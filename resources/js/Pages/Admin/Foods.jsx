@@ -36,8 +36,24 @@ export default function Foods({
     const [currentTab, setCurrentTab] = useState('items');
     const [categories, setCategories] = useState(initialCategories);
     const [items, setItems] = useState(initialItems);
+    const [showAddSubcategoryModal, setShowAddSubcategoryModal] = useState(false);
+    const [showEditSubcategoryModal, setShowEditSubcategoryModal] = useState(false);
+    const [newSubcategory, setNewSubcategory] = useState({ 
+        name: '', 
+        description: '',
+        is_kitchen_category: false,
+        parent_id: ''
+    });
+    const [editSubcategory, setEditSubcategory] = useState({ 
+        id: '', 
+        name: '', 
+        description: '',
+        is_kitchen_category: false,
+        parent_id: ''
+    });
     const [searchTerm, setSearchTerm] = useState('');
     const [filterCategory, setFilterCategory] = useState('');
+    const [filterCategoryType, setFilterCategoryType] = useState('');
     const [sortBy, setSortBy] = useState('name');
     
     const [currentPage, setCurrentPage] = useState(1);
@@ -114,6 +130,8 @@ export default function Foods({
     // Stats state
     const [stats, setStats] = useState({
         total_categories: total_categories || 0,
+        total_main_categories: 0,
+        total_subcategories: 0,
         total_items: total_items || 0,
         active_categories: active_categories || 0,
         available_items: available_items || 0
@@ -157,6 +175,9 @@ export default function Foods({
         }
     });
     
+    // Filtered categories (main categories only)
+    const filteredMainCategories = categories.filter(cat => !cat.parent_id);
+    
     // Pagination calculations for items
     const totalItemPages = Math.ceil(filteredItems.length / itemsPerPage);
     const paginatedItems = filteredItems.slice(
@@ -164,9 +185,9 @@ export default function Foods({
         currentPage * itemsPerPage
     );
     
-    // Pagination calculations for categories
-    const totalCategoryPages = Math.ceil(categories.length / categoriesPerPage);
-    const paginatedCategories = categories.slice(
+    // Pagination calculations for main categories
+    const totalCategoryPages = Math.ceil(filteredMainCategories.length / categoriesPerPage);
+    const paginatedCategories = filteredMainCategories.slice(
         (categoryPage - 1) * categoriesPerPage,
         categoryPage * categoriesPerPage
     );
@@ -174,7 +195,7 @@ export default function Foods({
     // Reset page when filter/search changes
     useEffect(() => {
         setCurrentPage(1);
-    }, [searchTerm, filterCategory, sortBy]);
+    }, [searchTerm, filterCategory, filterCategoryType, sortBy]);
 
     // Show notification
     const showNotification = (message, type = 'success') => {
@@ -206,7 +227,15 @@ export default function Foods({
     
     // Get CSRF token
     const getCsrfToken = () => {
-        return document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+        const metaToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+        if (metaToken) return metaToken;
+
+        const xsrfCookie = document.cookie
+            .split('; ')
+            .find(cookie => cookie.startsWith('XSRF-TOKEN='))
+            ?.split('=')[1];
+
+        return xsrfCookie ? decodeURIComponent(xsrfCookie) : '';
     };
     
     // Handle image selection for add item
@@ -336,18 +365,23 @@ export default function Foods({
         const url = selectedItem 
             ? `/admin/food-items/${selectedItem.id}`
             : '/admin/food-items';
-        
-        const method = selectedItem ? 'POST' : 'POST'; // POST with _method=PUT for update
-        
+
         if (selectedItem) {
             formData.append('_method', 'PUT');
+        }
+
+        const csrfToken = getCsrfToken();
+        if (csrfToken && !formData.has('_token')) {
+            formData.append('_token', csrfToken);
         }
 
         try {
             const response = await fetch(url, {
                 method: 'POST',
+                credentials: 'same-origin',
                 headers: {
-                    'X-CSRF-TOKEN': getCsrfToken(),
+                    'X-CSRF-TOKEN': csrfToken,
+                    'X-Requested-With': 'XMLHttpRequest',
                     'Accept': 'application/json',
                 },
                 body: formData
@@ -523,12 +557,19 @@ export default function Foods({
         if (newItem.image) {
             formData.append('image', newItem.image);
         }
+
+        const csrfToken = getCsrfToken();
+        if (csrfToken && !formData.has('_token')) {
+            formData.append('_token', csrfToken);
+        }
         
         try {
             const response = await fetch('/admin/food-items', {
                 method: 'POST',
+                credentials: 'same-origin',
                 headers: {
-                    'X-CSRF-TOKEN': getCsrfToken(),
+                    'X-CSRF-TOKEN': csrfToken,
+                    'X-Requested-With': 'XMLHttpRequest',
                     'Accept': 'application/json',
                 },
                 body: formData
@@ -652,12 +693,19 @@ export default function Foods({
         if (editItem.remove_image) {
             formData.append('remove_image', '1');
         }
+
+        const csrfToken = getCsrfToken();
+        if (csrfToken && !formData.has('_token')) {
+            formData.append('_token', csrfToken);
+        }
         
         try {
             const response = await fetch(`/admin/food-items/${editItem.id}`, {
                 method: 'POST',
+                credentials: 'same-origin',
                 headers: {
-                    'X-CSRF-TOKEN': getCsrfToken(),
+                    'X-CSRF-TOKEN': csrfToken,
+                    'X-Requested-With': 'XMLHttpRequest',
                     'Accept': 'application/json',
                 },
                 body: formData
@@ -752,6 +800,94 @@ export default function Foods({
         setDeleteTarget({ type: '', id: '', name: '' });
     };
     
+    // Add subcategory
+    const handleAddSubcategory = async (e) => {
+        e.preventDefault();
+        if (!newSubcategory.name.trim()) {
+            showNotification('Subcategory name is required', 'error');
+            return;
+        }
+        
+        setLoading({ type: 'add-subcategory', id: '' });
+        try {
+            const response = await fetch('/admin/food-categories', {
+                method: 'POST',
+                headers: {
+                    'X-CSRF-TOKEN': getCsrfToken(),
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                },
+                body: JSON.stringify({
+                    name: newSubcategory.name.trim(),
+                    description: newSubcategory.description || '',
+                    is_kitchen_category: newSubcategory.is_kitchen_category,
+                    parent_id: newSubcategory.parent_id
+                })
+            });
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                setCategories(prev => [...prev, data.category]);
+                const newTotalPages = Math.ceil((categories.length + 1) / categoriesPerPage);
+                setCategoryPage(newTotalPages);
+                showNotification('Subcategory added successfully');
+                setNewSubcategory({ 
+                    name: '', 
+                    description: '',
+                    is_kitchen_category: false,
+                    parent_id: ''
+                });
+                setShowAddSubcategoryModal(false);
+            }
+        } catch (error) {
+            showNotification('Failed to add subcategory', 'error');
+        } finally {
+            setLoading({ type: '', id: '' });
+        }
+    };
+    
+    // Update subcategory
+    const handleUpdateSubcategory = async (e) => {
+        e.preventDefault();
+        if (!editSubcategory.name.trim()) {
+            showNotification('Subcategory name is required', 'error');
+            return;
+        }
+        
+        setLoading({ type: 'update-subcategory', id: editSubcategory.id });
+        try {
+            const response = await fetch(`/admin/food-categories/${editSubcategory.id}`, {
+                method: 'PUT',
+                headers: {
+                    'X-CSRF-TOKEN': getCsrfToken(),
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                },
+                body: JSON.stringify({
+                    name: editSubcategory.name.trim(),
+                    description: editSubcategory.description || '',
+                    is_kitchen_category: editSubcategory.is_kitchen_category,
+                    parent_id: editSubcategory.parent_id
+                })
+            });
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                setCategories(prev => prev.map(cat => 
+                    cat.id === editSubcategory.id ? { ...cat, name: editSubcategory.name, description: editSubcategory.description, is_kitchen_category: editSubcategory.is_kitchen_category, parent_id: editSubcategory.parent_id } : cat
+                ));
+                showNotification('Subcategory updated successfully');
+                setShowEditSubcategoryModal(false);
+            }
+        } catch (error) {
+            showNotification('Failed to update subcategory', 'error');
+        } finally {
+            setLoading({ type: '', id: '' });
+        }
+    };
+    
     // Open edit modals
     const openEditCategoryModal = (category) => {
         setEditCategory({
@@ -761,6 +897,17 @@ export default function Foods({
             is_kitchen_category: category.is_kitchen_category || false
         });
         setShowEditCategoryModal(true);
+    };
+    
+    const openEditSubcategoryModal = (subcategory) => {
+        setEditSubcategory({
+            id: subcategory.id,
+            name: subcategory.name,
+            description: subcategory.description || '',
+            is_kitchen_category: subcategory.is_kitchen_category || false,
+            parent_id: subcategory.parent_id
+        });
+        setShowEditSubcategoryModal(true);
     };
     
     const openEditItemModal = (item) => {
@@ -812,6 +959,9 @@ export default function Foods({
         month: 'long', 
         day: 'numeric' 
     });
+    
+    // Get main categories for dropdown
+    const mainCategories = categories.filter(cat => !cat.parent_id);
     
     // Connection Status Badge
     const ConnectionStatusBadge = () => (
@@ -1211,33 +1361,48 @@ export default function Foods({
                                                     )}
                                                 </div>
                                             </div>
-                                            <div className="flex items-center gap-2">
-                                                <button
-                                                    onClick={() => toggleCategoryStatus(category)}
-                                                    className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                                                        category.is_active
-                                                            ? 'bg-green-100 text-green-700 hover:bg-green-200'
-                                                            : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
-                                                    }`}
-                                                    disabled={loading.type === 'category-toggle' && loading.id === category.id}
-                                                >
-                                                    {loading.type === 'category-toggle' && loading.id === category.id ? (
-                                                        <Loader2 className="h-4 w-4 animate-spin" />
-                                                    ) : category.is_active ? 'Active' : 'Inactive'}
-                                                </button>
-                                                <button
-                                                    onClick={() => openEditCategoryModal(category)}
-                                                    className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                                                >
-                                                    <Edit className="h-4 w-4" />
-                                                </button>
-                                                <button
-                                                    onClick={() => openDeleteModal('category', category.id, category.name)}
-                                                    className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                                                >
-                                                    <Trash2 className="h-4 w-4" />
-                                                </button>
-                                            </div>
+                                                <div className="flex items-center gap-2">
+                                                    <button
+                                                        onClick={() => toggleCategoryStatus(category)}
+                                                        className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                                                            category.is_active
+                                                                ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                                                                : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
+                                                        }`}
+                                                        disabled={loading.type === 'category-toggle' && loading.id === category.id}
+                                                    >
+                                                        {loading.type === 'category-toggle' && loading.id === category.id ? (
+                                                            <Loader2 className="h-4 w-4 animate-spin" />
+                                                        ) : category.is_active ? 'Active' : 'Inactive'}
+                                                    </button>
+                                                    <button
+                                                        onClick={() => openEditCategoryModal(category)}
+                                                        className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                                    >
+                                                        <Edit className="h-4 w-4" />
+                                                    </button>
+                                                    <button
+                                                        onClick={() => openDeleteModal('category', category.id, category.name)}
+                                                        className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                                    >
+                                                        <Trash2 className="h-4 w-4" />
+                                                    </button>
+                                                    <button
+                                                        onClick={() => {
+                                                            setNewSubcategory({ 
+                                                                name: '', 
+                                                                description: '',
+                                                                is_kitchen_category: false,
+                                                                parent_id: category.id
+                                                            });
+                                                            setShowAddSubcategoryModal(true);
+                                                        }}
+                                                        className="p-2 text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
+                                                        title="Add subcategory"
+                                                    >
+                                                        <Plus className="h-4 w-4" />
+                                                    </button>
+                                                </div>
                                         </div>
                                     ))
                                 )}
@@ -1314,6 +1479,19 @@ export default function Foods({
                                 </div>
                                 
                                 <div>
+                                    <label className="text-sm font-medium text-gray-700 mb-1 block">Category Type</label>
+                                    <select
+                                        value={filterCategoryType}
+                                        onChange={(e) => setFilterCategoryType(e.target.value)}
+                                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                                    >
+                                        <option value="">All Types</option>
+                                        <option value="main">Main Categories</option>
+                                        <option value="sub">Subcategories</option>
+                                    </select>
+                                </div>
+                                
+                                <div>
                                     <label className="text-sm font-medium text-gray-700 mb-1 block">Sort By</label>
                                     <select
                                         value={sortBy}
@@ -1346,8 +1524,25 @@ export default function Foods({
                                     </div>
                                 ) : (
                                     paginatedItems.map((item) => {
-                                        const isLowStock = item.stock_quantity !== null && 
-                                                           item.stock_quantity <= item.low_stock_threshold;
+                                        const inventoryStatus = item.inventory_status || 'no_recipe';
+                                        const rawServings = item.inventory_available_servings;
+                                        const parsedServings = rawServings === null || rawServings === undefined
+                                            ? null
+                                            : Number(rawServings);
+                                        const inventoryServings = Number.isFinite(parsedServings) ? parsedServings : null;
+                                        const inventoryLabel = item.inventory_status_label || 'No Recipe';
+                                        const inventoryBadgeClass =
+                                            inventoryStatus === 'in'
+                                                ? 'bg-emerald-100 text-emerald-700'
+                                                : inventoryStatus === 'low'
+                                                    ? 'bg-amber-100 text-amber-700'
+                                                    : inventoryStatus === 'out'
+                                                        ? 'bg-rose-100 text-rose-700'
+                                                        : 'bg-gray-100 text-gray-700';
+                                        const inventoryText = inventoryServings === null
+                                            ? inventoryLabel
+                                            : `${inventoryLabel} (${inventoryServings} serving${inventoryServings === 1 ? '' : 's'})`;
+
                                         return (
                                             <div key={item.id} className="bg-gray-50 rounded-lg border border-gray-200 overflow-hidden hover:shadow-lg transition-shadow">
                                                 <div 
@@ -1410,13 +1605,9 @@ export default function Foods({
                                                             <Folder className="h-3 w-3 mr-1" />
                                                             {item.category_name}
                                                         </span>
-                                                        <span className={`px-2 py-1 rounded-full text-xs font-medium flex items-center ${
-                                                            isLowStock
-                                                                ? 'bg-amber-100 text-amber-700'
-                                                                : 'bg-gray-100 text-gray-700'
-                                                        }`}>
+                                                        <span className={`px-2 py-1 rounded-full text-xs font-medium flex items-center ${inventoryBadgeClass}`}>
                                                             <Package className="h-3 w-3 mr-1" />
-                                                            Stock: {item.stock_quantity || 0}
+                                                            {inventoryText}
                                                         </span>
                                                     </div>
                                                     
@@ -2178,6 +2369,168 @@ export default function Foods({
                                     disabled={loading.type === 'update-item'}
                                 >
                                     {loading.type === 'update-item' ? (
+                                        <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                                    ) : (
+                                        <Save className="h-4 w-4 mr-2" />
+                                    )}
+                                    Save Changes
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+            
+            {/* Add Subcategory Modal */}
+            {showAddSubcategoryModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+                    <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 animate-scale-in">
+                        <div className="flex justify-between items-center px-6 py-4 border-b border-gray-100">
+                            <div className="flex items-center">
+                                <div className="p-2 bg-purple-100 rounded-lg mr-3">
+                                    <Plus className="h-5 w-5 text-purple-600" />
+                                </div>
+                                <h3 className="text-lg font-semibold text-gray-900">New Subcategory</h3>
+                            </div>
+                            <button 
+                                onClick={() => setShowAddSubcategoryModal(false)}
+                                className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100"
+                            >
+                                <X className="h-5 w-5" />
+                            </button>
+                        </div>
+                        <form onSubmit={handleAddSubcategory} className="p-6">
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="text-sm font-medium text-gray-700 mb-1 block">
+                                        Subcategory Name <span className="text-red-500">*</span>
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={newSubcategory.name}
+                                        onChange={(e) => setNewSubcategory({...newSubcategory, name: e.target.value})}
+                                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                                        placeholder="e.g., Appetizers, Main Course"
+                                        required
+                                    />
+                                </div>
+                                <div>
+                                    <label className="text-sm font-medium text-gray-700 mb-1 block">Description</label>
+                                    <textarea
+                                        value={newSubcategory.description}
+                                        onChange={(e) => setNewSubcategory({...newSubcategory, description: e.target.value})}
+                                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                                        rows="3"
+                                        placeholder="Brief description of this subcategory..."
+                                    />
+                                </div>
+                                <div className="flex items-center">
+                                    <input
+                                        type="checkbox"
+                                        id="add_is_kitchen_category_sub"
+                                        checked={newSubcategory.is_kitchen_category}
+                                        onChange={(e) => setNewSubcategory({...newSubcategory, is_kitchen_category: e.target.checked})}
+                                        className="h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded"
+                                    />
+                                    <label htmlFor="add_is_kitchen_category_sub" className="ml-2 text-sm text-gray-700">
+                                        Kitchen Category (items prepared in kitchen)
+                                    </label>
+                                </div>
+                            </div>
+                            <div className="mt-6 flex justify-end gap-3">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowAddSubcategoryModal(false)}
+                                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    className="px-4 py-2 text-sm font-medium text-white bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors flex items-center"
+                                    disabled={loading.type === 'add-subcategory'}
+                                >
+                                    {loading.type === 'add-subcategory' ? (
+                                        <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                                    ) : (
+                                        <Save className="h-4 w-4 mr-2" />
+                                    )}
+                                    Create Subcategory
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+            
+            {/* Edit Subcategory Modal */}
+            {showEditSubcategoryModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+                    <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 animate-scale-in">
+                        <div className="flex justify-between items-center px-6 py-4 border-b border-gray-100">
+                            <div className="flex items-center">
+                                <div className="p-2 bg-purple-100 rounded-lg mr-3">
+                                    <Edit className="h-5 w-5 text-purple-600" />
+                                </div>
+                                <h3 className="text-lg font-semibold text-gray-900">Edit Subcategory</h3>
+                            </div>
+                            <button 
+                                onClick={() => setShowEditSubcategoryModal(false)}
+                                className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100"
+                            >
+                                <X className="h-5 w-5" />
+                            </button>
+                        </div>
+                        <form onSubmit={handleUpdateSubcategory} className="p-6">
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="text-sm font-medium text-gray-700 mb-1 block">
+                                        Subcategory Name <span className="text-red-500">*</span>
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={editSubcategory.name}
+                                        onChange={(e) => setEditSubcategory({...editSubcategory, name: e.target.value})}
+                                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                                        required
+                                    />
+                                </div>
+                                <div>
+                                    <label className="text-sm font-medium text-gray-700 mb-1 block">Description</label>
+                                    <textarea
+                                        value={editSubcategory.description}
+                                        onChange={(e) => setEditSubcategory({...editSubcategory, description: e.target.value})}
+                                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                                        rows="3"
+                                    />
+                                </div>
+                                <div className="flex items-center">
+                                    <input
+                                        type="checkbox"
+                                        id="edit_is_kitchen_category_sub"
+                                        checked={editSubcategory.is_kitchen_category}
+                                        onChange={(e) => setEditSubcategory({...editSubcategory, is_kitchen_category: e.target.checked})}
+                                        className="h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded"
+                                    />
+                                    <label htmlFor="edit_is_kitchen_category_sub" className="ml-2 text-sm text-gray-700">
+                                        Kitchen Category
+                                    </label>
+                                </div>
+                            </div>
+                            <div className="mt-6 flex justify-end gap-3">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowEditSubcategoryModal(false)}
+                                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    className="px-4 py-2 text-sm font-medium text-white bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors flex items-center"
+                                    disabled={loading.type === 'update-subcategory'}
+                                >
+                                    {loading.type === 'update-subcategory' ? (
                                         <Loader2 className="h-4 w-4 animate-spin mr-2" />
                                     ) : (
                                         <Save className="h-4 w-4 mr-2" />

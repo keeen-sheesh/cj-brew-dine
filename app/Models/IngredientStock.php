@@ -5,25 +5,22 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
-class InventoryTransaction extends Model
+class IngredientStock extends Model
 {
     use HasFactory;
 
     protected $fillable = [
         'ingredient_id',
         'inventory_pool_id',
-        'quantity_delta',
-        'reason',
-        'reference_type',
-        'reference_id',
-        'user_id',
-        'notes',
-        'meta',
+        'quantity',
+        'min_stock',
+        'cost_per_unit',
     ];
 
     protected $casts = [
-        'quantity_delta' => 'decimal:3',
-        'meta' => 'array',
+        'quantity' => 'decimal:3',
+        'min_stock' => 'decimal:3',
+        'cost_per_unit' => 'decimal:2',
     ];
 
     public function ingredient()
@@ -35,9 +32,5 @@ class InventoryTransaction extends Model
     {
         return $this->belongsTo(InventoryPool::class, 'inventory_pool_id');
     }
-
-    public function user()
-    {
-        return $this->belongsTo(User::class);
-    }
 }
+

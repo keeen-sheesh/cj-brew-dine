@@ -5,37 +5,33 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Sale;
 use App\Models\SaleItem;
-use App\Models\Category;
-use App\Models\Item;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Carbon;
 
 class KitchenController extends Controller
 {
     public function index(Request $request)
     {
-        // Get date filter
-        $dateFilter = $request->get('date', now()->format('Y-m-d'));
+        [$rangeStart, $rangeEnd, $dateFilter] = $this->resolveDateRange($request);
         
         // Get last check time from session
         $lastCheck = $request->session()->get('last_kitchen_check', now()->subMinutes(5)->timestamp);
         
         // Get orders with kitchen items - INCLUDING COMPLETED ORDERS
-        $orders = Sale::with(['saleItems.item.category', 'customer', 'paymentMethod'])
-            ->whereHas('saleItems.item.category', function($query) {
-                $query->where('is_kitchen_category', 1);
-            })
+        $orders = $this->kitchenSalesQuery()
+            ->with(['saleItems.item.category', 'customer', 'paymentMethod'])
             ->whereIn('status', ['pending', 'preparing', 'ready', 'completed']) // ADDED 'completed'
-            ->whereDate('created_at', $dateFilter)
+            ->whereBetween('created_at', [$rangeStart, $rangeEnd])
             ->orderBy('created_at', 'asc')
             ->get()
             ->map(function($order) {
                 // Get only kitchen items
                 $kitchenItems = [];
                 foreach ($order->saleItems as $item) {
-                    if ($item->item && $item->item->category && $item->item->category->is_kitchen_category == 1) {
+                    if ($this->isKitchenSaleItem($item)) {
                         $kitchenItems[] = [
                             'id' => $item->id,
                             'name' => $item->item->name,
@@ -85,19 +81,17 @@ class KitchenController extends Controller
             ->values();
 
         // Get new orders count (excluding completed for new order sound)
-        $newOrdersCount = Sale::whereHas('saleItems.item.category', function($query) {
-                $query->where('is_kitchen_category', 1);
-            })
+        $newOrdersCount = $this->kitchenSalesQuery()
             ->where('status', 'pending')
             ->where('created_at', '>', date('Y-m-d H:i:s', $lastCheck))
+            ->whereBetween('created_at', [$rangeStart, $rangeEnd])
             ->count();
         
         // Also check for orders that might have been updated (status changed) - excluding completed
-        $updatedOrdersCount = Sale::whereHas('saleItems.item.category', function($query) {
-                $query->where('is_kitchen_category', 1);
-            })
+        $updatedOrdersCount = $this->kitchenSalesQuery()
             ->whereIn('status', ['pending', 'preparing', 'ready'])
             ->where('updated_at', '>', date('Y-m-d H:i:s', $lastCheck))
+            ->whereBetween('created_at', [$rangeStart, $rangeEnd])
             ->count();
         
         $hasNewOrder = ($newOrdersCount > 0 || $updatedOrdersCount > 0);
@@ -117,11 +111,35 @@ class KitchenController extends Controller
             'completed' => $orders->where('kitchen_status', 'completed')->count()
         ]);
 
+        // Get statistics for dashboard
+        $todayOrders = $this->kitchenSalesQuery()
+            ->whereDate('created_at', now()->format('Y-m-d'))
+            ->count();
+
+        $weekStart = now()->startOfWeek();
+        $thisWeekOrders = $this->kitchenSalesQuery()
+            ->whereBetween('created_at', [$weekStart, now()])
+            ->count();
+
+        $monthStart = now()->startOfMonth();
+        $thisMonthOrders = $this->kitchenSalesQuery()
+            ->whereBetween('created_at', [$monthStart, now()])
+            ->count();
+
         return Inertia::render('Admin/Kitchen', [
             'orders' => $orders,
             'hasNewOrder' => $hasNewOrder,
             'currentTime' => now()->timestamp,
             'currentDate' => $dateFilter,
+            'dateRange' => [
+                'from' => $rangeStart->toDateString(),
+                'to' => $rangeEnd->toDateString(),
+            ],
+            'stats' => [
+                'today' => $todayOrders,
+                'thisWeek' => $thisWeekOrders,
+                'thisMonth' => $thisMonthOrders,
+            ],
         ]);
     }
 
@@ -129,25 +147,25 @@ class KitchenController extends Controller
 {
     $since = $request->get('since', now()->subMinutes(5)->timestamp);
     $sinceDateTime = date('Y-m-d H:i:s', $since);
-    $dateFilter = $request->get('date', now()->format('Y-m-d'));
+    [$rangeStart, $rangeEnd, $dateFilter] = $this->resolveDateRange($request);
     
     Log::info('========== KITCHEN POLLING CHECK ==========');
     Log::info('Polling parameters:', [
         'since' => $since,
         'sinceDateTime' => $sinceDateTime,
-        'dateFilter' => $dateFilter
+        'dateFilter' => $dateFilter,
+        'from' => $rangeStart->toDateString(),
+        'to' => $rangeEnd->toDateString(),
     ]);
     
     // Check if there are ANY new or updated orders since last check
-    $newOrdersQuery = Sale::whereHas('saleItems.item.category', function($query) {
-            $query->where('is_kitchen_category', 1);
-        })
+    $newOrdersQuery = $this->kitchenSalesQuery()
         ->whereIn('status', ['pending', 'preparing', 'ready', 'completed'])
         ->where(function($query) use ($sinceDateTime) {
             $query->where('created_at', '>', $sinceDateTime)
                   ->orWhere('updated_at', '>', $sinceDateTime);
         })
-        ->whereDate('created_at', $dateFilter);
+        ->whereBetween('created_at', [$rangeStart, $rangeEnd]);
     
     $newOrdersCount = $newOrdersQuery->count();
     $hasNewOrders = $newOrdersCount > 0;
@@ -155,12 +173,10 @@ class KitchenController extends Controller
     Log::info('New orders found:', ['count' => $newOrdersCount]);
     
     // Get all kitchen orders for the date
-    $allOrdersQuery = Sale::with(['saleItems.item.category', 'customer', 'paymentMethod'])
-        ->whereHas('saleItems.item.category', function($query) {
-            $query->where('is_kitchen_category', 1);
-        })
+    $allOrdersQuery = $this->kitchenSalesQuery()
+        ->with(['saleItems.item.category', 'customer', 'paymentMethod'])
         ->whereIn('status', ['pending', 'preparing', 'ready', 'completed'])
-        ->whereDate('created_at', $dateFilter)
+        ->whereBetween('created_at', [$rangeStart, $rangeEnd])
         ->orderBy('created_at', 'asc');
     
     $allOrdersCount = $allOrdersQuery->count();
@@ -170,7 +186,7 @@ class KitchenController extends Controller
         ->map(function($order) {
             $kitchenItems = [];
             foreach ($order->saleItems as $item) {
-                if ($item->item && $item->item->category && $item->item->category->is_kitchen_category == 1) {
+                if ($this->isKitchenSaleItem($item)) {
                     $kitchenItems[] = [
                         'id' => $item->id,
                         'name' => $item->item->name,
@@ -217,8 +233,13 @@ class KitchenController extends Controller
         'orders' => $allOrders,
         'has_new_orders' => $hasNewOrders,
         'timestamp' => now()->timestamp,
-        'count' => $allOrders->count(),
-    ]);
+            'count' => $allOrders->count(),
+            'date_filter' => $dateFilter,
+            'range' => [
+                'from' => $rangeStart->toDateString(),
+                'to' => $rangeEnd->toDateString(),
+            ],
+        ]);
 }
 
     public function startPreparing(Request $request, Sale $order)
@@ -230,10 +251,7 @@ class KitchenController extends Controller
                 'kitchen_status' => 'preparing'
             ]);
 
-            SaleItem::where('sale_id', $order->id)
-                ->whereHas('item.category', function($query) {
-                    $query->where('is_kitchen_category', 1);
-                })
+            $this->kitchenSaleItemsQuery($order->id)
                 ->update([
                     'kitchen_status' => 'preparing',
                     'kitchen_started_at' => now(),
@@ -273,10 +291,7 @@ class KitchenController extends Controller
                 'kitchen_status' => 'ready'
             ]);
 
-            SaleItem::where('sale_id', $order->id)
-                ->whereHas('item.category', function($query) {
-                    $query->where('is_kitchen_category', 1);
-                })
+            $this->kitchenSaleItemsQuery($order->id)
                 ->update([
                     'kitchen_status' => 'ready',
                     'kitchen_completed_at' => now(),
@@ -317,10 +332,7 @@ class KitchenController extends Controller
                 'kitchen_status' => 'completed'
             ]);
 
-            SaleItem::where('sale_id', $order->id)
-                ->whereHas('item.category', function($query) {
-                    $query->where('is_kitchen_category', 1);
-                })
+            $this->kitchenSaleItemsQuery($order->id)
                 ->update([
                     'kitchen_status' => 'completed',
                     'kitchen_completed_at' => now(),
@@ -358,10 +370,7 @@ class KitchenController extends Controller
         try {
             $sale->update(['kitchen_status' => $request->status]);
 
-            SaleItem::where('sale_id', $sale->id)
-                ->whereHas('item.category', function($query) {
-                    $query->where('is_kitchen_category', 1);
-                })
+            $this->kitchenSaleItemsQuery($sale->id)
                 ->update([
                     'kitchen_status' => $request->status,
                     'kitchen_started_at' => $request->status === 'preparing' ? now() : DB::raw('kitchen_started_at'),
@@ -427,9 +436,7 @@ class KitchenController extends Controller
     private function updateOrderKitchenStatus($saleId)
     {
         $sale = Sale::with(['saleItems' => function($query) {
-            $query->whereHas('item.category', function($q) {
-                $q->where('is_kitchen_category', 1);
-            });
+            $this->applyKitchenSaleItemsConstraint($query);
         }])->find($saleId);
         
         if (!$sale) return;
@@ -459,20 +466,18 @@ class KitchenController extends Controller
 
     public function filterByDate(Request $request)
     {
-        $date = $request->get('date', now()->format('Y-m-d'));
+        [$rangeStart, $rangeEnd, $date] = $this->resolveDateRange($request);
         
-        $orders = Sale::with(['saleItems.item.category', 'customer', 'paymentMethod'])
-            ->whereHas('saleItems.item.category', function($query) {
-                $query->where('is_kitchen_category', 1);
-            })
+        $orders = $this->kitchenSalesQuery()
+            ->with(['saleItems.item.category', 'customer', 'paymentMethod'])
             ->whereIn('status', ['pending', 'preparing', 'ready', 'completed']) // ADDED 'completed'
-            ->whereDate('created_at', $date)
+            ->whereBetween('created_at', [$rangeStart, $rangeEnd])
             ->orderBy('created_at', 'asc')
             ->get()
             ->map(function($order) {
                 $kitchenItems = [];
                 foreach ($order->saleItems as $item) {
-                    if ($item->item && $item->item->category && $item->item->category->is_kitchen_category == 1) {
+                    if ($this->isKitchenSaleItem($item)) {
                         $kitchenItems[] = [
                             'id' => $item->id,
                             'name' => $item->item->name,
@@ -508,7 +513,11 @@ class KitchenController extends Controller
         return response()->json([
             'success' => true,
             'orders' => $orders,
-            'date' => $date
+            'date' => $date,
+            'range' => [
+                'from' => $rangeStart->toDateString(),
+                'to' => $rangeEnd->toDateString(),
+            ],
         ]);
     }
 
@@ -531,6 +540,106 @@ class KitchenController extends Controller
             Log::info('Menu update broadcasted', ['timestamp' => now()->timestamp]);
         } catch (\Exception $e) {
             Log::error('Failed to broadcast menu update: ' . $e->getMessage());
+        }
+    }
+
+    private function kitchenSalesQuery()
+    {
+        return Sale::query()->whereHas('saleItems', function ($query) {
+            $this->applyKitchenSaleItemsConstraint($query);
+        });
+    }
+
+    private function kitchenSaleItemsQuery(int $saleId)
+    {
+        return SaleItem::where('sale_id', $saleId)
+            ->where(function ($query) {
+                $this->applyKitchenSaleItemsConstraint($query);
+            });
+    }
+
+    private function applyKitchenSaleItemsConstraint($query): void
+    {
+        $query->where(function ($kitchenQuery) {
+            $kitchenQuery->whereNotNull('kitchen_status')
+                ->orWhereHas('item.category', function ($categoryQuery) {
+                    $categoryQuery->where('is_kitchen_category', 1);
+                });
+        });
+    }
+
+    private function isKitchenSaleItem(SaleItem $saleItem): bool
+    {
+        if (!is_null($saleItem->kitchen_status)) {
+            return true;
+        }
+
+        return (bool) optional(optional($saleItem->item)->category)->is_kitchen_category;
+    }
+
+    private function resolveDateRange(Request $request): array
+    {
+        $filter = $request->filled('filter') ? (string) $request->get('filter') : null;
+        $from = $request->get('from');
+        $to = $request->get('to');
+
+        try {
+            if ($from && $to) {
+                return [
+                    Carbon::parse($from)->startOfDay(),
+                    Carbon::parse($to)->endOfDay(),
+                    $filter,
+                ];
+            }
+        } catch (\Throwable $e) {
+            Log::warning('Invalid kitchen date range provided, falling back to filter/date', [
+                'filter' => $filter ?? 'none',
+                'from' => $from,
+                'to' => $to,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        $today = now();
+        if (is_null($filter) && $request->filled('date')) {
+            $date = Carbon::parse((string) $request->get('date'));
+            return [$date->copy()->startOfDay(), $date->copy()->endOfDay(), $date->toDateString()];
+        }
+
+        $filter = $filter ?? 'today';
+        switch ($filter) {
+            case 'yesterday':
+                return [$today->copy()->subDay()->startOfDay(), $today->copy()->subDay()->endOfDay(), $filter];
+            case 'this_week':
+                return [$today->copy()->startOfWeek(), $today->copy()->endOfWeek(), $filter];
+            case 'last_week':
+                return [
+                    $today->copy()->subWeek()->startOfWeek(),
+                    $today->copy()->subWeek()->endOfWeek(),
+                    $filter,
+                ];
+            case 'this_month':
+                return [$today->copy()->startOfMonth(), $today->copy()->endOfMonth(), $filter];
+            case 'last_month':
+                return [
+                    $today->copy()->subMonthNoOverflow()->startOfMonth(),
+                    $today->copy()->subMonthNoOverflow()->endOfMonth(),
+                    $filter,
+                ];
+            case 'custom':
+                if ($request->filled('date')) {
+                    $date = Carbon::parse((string) $request->get('date'));
+                    return [$date->copy()->startOfDay(), $date->copy()->endOfDay(), $filter];
+                }
+                return [$today->copy()->startOfDay(), $today->copy()->endOfDay(), 'today'];
+            case 'today':
+                return [$today->copy()->startOfDay(), $today->copy()->endOfDay(), $filter];
+            default:
+                if ($request->filled('date')) {
+                    $date = Carbon::parse((string) $request->get('date'));
+                    return [$date->copy()->startOfDay(), $date->copy()->endOfDay(), $date->toDateString()];
+                }
+                return [$today->copy()->startOfDay(), $today->copy()->endOfDay(), 'today'];
         }
     }
 }

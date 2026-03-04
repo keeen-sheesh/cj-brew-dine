@@ -12,6 +12,7 @@ class Ingredient extends Model
     protected $fillable = [
         'name',
         'unit',
+        'pieces_per_box',
         'is_dry',
         'quantity',
         'min_stock',
@@ -29,5 +30,16 @@ class Ingredient extends Model
         return $this->belongsToMany(Item::class, 'item_ingredients')
                     ->withPivot('quantity_required')
                     ->withTimestamps();
+    }
+
+    public function stocks()
+    {
+        return $this->hasMany(IngredientStock::class);
+    }
+
+    public function stockForPool(string $poolCode): ?IngredientStock
+    {
+        return $this->stocks
+            ->first(fn (IngredientStock $stock) => optional($stock->pool)->code === $poolCode);
     }
 }

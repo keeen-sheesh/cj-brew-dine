@@ -269,9 +269,6 @@ export default function DashboardModals({
                             <button className="px-4 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 font-medium">
                                 Generate Purchase Order
                             </button>
-                            <button className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-medium">
-                                Email Supplier
-                            </button>
                         </div>
                     </div>
                 </div>

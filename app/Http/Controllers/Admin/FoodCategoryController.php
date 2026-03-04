@@ -6,6 +6,7 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Category;
 use App\Models\Item;
+use App\Models\InventoryPool;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -13,12 +14,15 @@ use Inertia\Inertia;
 
 class FoodCategoryController extends Controller
 {
+    private const LOW_STOCK_SERVING_THRESHOLD = 3;
+
     /**
      * Display a listing of the resource (Inertia view)
      */
     public function index()
     {
-        $categories = Category::orderBy('sort_order', 'asc')
+        $categories = Category::with(['parent', 'subcategories'])
+            ->orderBy('sort_order', 'asc')
             ->orderBy('created_at', 'desc')
             ->get()
             ->map(function ($category) {
@@ -29,44 +33,30 @@ class FoodCategoryController extends Controller
                     'is_active' => (bool)$category->is_active,
                     'is_kitchen_category' => (bool)$category->is_kitchen_category,
                     'sort_order' => $category->sort_order,
+                    'parent_id' => $category->parent_id,
+                    'parent_name' => $category->parent?->name,
+                    'has_subcategories' => $category->subcategories->count() > 0,
+                    'subcategories' => $category->subcategories->map(function ($subcat) {
+                        return [
+                            'id' => $subcat->id,
+                            'name' => $subcat->name,
+                            'description' => $subcat->description,
+                            'is_active' => (bool)$subcat->is_active,
+                            'is_kitchen_category' => (bool)$subcat->is_kitchen_category,
+                            'sort_order' => $subcat->sort_order,
+                            'parent_id' => $subcat->parent_id,
+                        ];
+                    }),
                 ];
             });
             
-        $items = Item::with(['category', 'ingredients'])
+        $items = Item::with(['category', 'ingredients.stocks.pool'])
             ->orderBy('category_id')
             ->orderBy('sort_order', 'asc')
             ->orderBy('name')
             ->get()
             ->map(function ($item) {
-                return [
-                    'id' => $item->id,
-                    'name' => $item->name,
-                    'description' => $item->description,
-                    'price' => (float)$item->price,
-                    'category_id' => $item->category_id,
-                    'category_name' => $item->category->name ?? '',
-                    'is_available' => (bool)$item->is_available,
-                    'is_featured' => (bool)$item->is_featured,
-                    'stock_quantity' => $item->stock_quantity ?? 0,
-                    'low_stock_threshold' => $item->low_stock_threshold ?? 10,
-                    'sort_order' => $item->sort_order ?? 999,
-                    'image' => $item->image,
-                    'pricing_type' => $item->pricing_type ?? 'single',
-                    'price_solo' => $item->price_solo ? (float)$item->price_solo : null,
-                    'price_whole' => $item->price_whole ? (float)$item->price_whole : null,
-                    'has_recipe' => (bool)$item->has_recipe,
-                    'ingredients' => $item->ingredients->map(function($ing) {
-                        return [
-                            'id' => $ing->id,
-                            'name' => $ing->name,
-                            'quantity_required' => (float)$ing->pivot->quantity_required,
-                            'unit' => $ing->pivot->unit ?? $ing->unit,
-                            'notes' => $ing->pivot->notes,
-                            'cost_per_unit' => (float)$ing->cost_per_unit,
-                            'quantity' => (float)$ing->quantity,
-                        ];
-                    }),
-                ];
+                return $this->formatItemPayload($item);
             });
         
         // Get stats
@@ -87,7 +77,8 @@ class FoodCategoryController extends Controller
      */
     public function apiIndex(Request $request)
     {
-        $categories = Category::orderBy('sort_order', 'asc')
+        $categories = Category::with(['parent', 'subcategories'])
+            ->orderBy('sort_order', 'asc')
             ->orderBy('created_at', 'desc')
             ->get()
             ->map(function ($category) {
@@ -98,6 +89,9 @@ class FoodCategoryController extends Controller
                     'is_active' => (bool)$category->is_active,
                     'is_kitchen_category' => (bool)$category->is_kitchen_category,
                     'sort_order' => $category->sort_order,
+                    'parent_id' => $category->parent_id,
+                    'parent_name' => $category->parent?->name,
+                    'has_subcategories' => $category->subcategories->count() > 0,
                 ];
             });
             
@@ -128,6 +122,7 @@ class FoodCategoryController extends Controller
                 'name' => $validated['name'],
                 'description' => $validated['description'] ?? null,
                 'is_kitchen_category' => isset($validated['is_kitchen_category']) ? (bool)$validated['is_kitchen_category'] : false,
+                'parent_id' => $validated['parent_id'] ?? null,
                 'sort_order' => $maxOrder + 1,
                 'is_active' => true,
             ]);
@@ -150,6 +145,8 @@ class FoodCategoryController extends Controller
                     'is_active' => (bool)$category->is_active,
                     'is_kitchen_category' => (bool)$category->is_kitchen_category,
                     'sort_order' => $category->sort_order,
+                    'parent_id' => $category->parent_id,
+                    'parent_name' => $category->parent?->name,
                 ],
                 'stats' => $stats,
             ]);
@@ -183,6 +180,7 @@ class FoodCategoryController extends Controller
                 'name' => $validated['name'],
                 'description' => $validated['description'] ?? null,
                 'is_kitchen_category' => isset($validated['is_kitchen_category']) ? (bool)$validated['is_kitchen_category'] : $category->is_kitchen_category,
+                'parent_id' => $validated['parent_id'] ?? $category->parent_id,
             ]);
             
             DB::commit();
@@ -200,6 +198,8 @@ class FoodCategoryController extends Controller
                     'is_active' => (bool)$category->is_active,
                     'is_kitchen_category' => (bool)$category->is_kitchen_category,
                     'sort_order' => $category->sort_order,
+                    'parent_id' => $category->parent_id,
+                    'parent_name' => $category->parent?->name,
                 ],
             ]);
 
@@ -333,6 +333,171 @@ class FoodCategoryController extends Controller
         }
     }
 
+    private function formatItemPayload(Item $item): array
+    {
+        $poolCode = $this->resolveItemPoolCode($item);
+        $inventory = $this->buildInventorySnapshot($item, $poolCode);
+
+        return [
+            'id' => $item->id,
+            'name' => $item->name,
+            'description' => $item->description,
+            'price' => (float) $item->price,
+            'category_id' => $item->category_id,
+            'category_name' => $item->category->name ?? '',
+            'inventory_pool_code' => $poolCode,
+            'is_available' => (bool) $item->is_available,
+            'is_featured' => (bool) $item->is_featured,
+            'stock_quantity' => $item->stock_quantity ?? 0,
+            'low_stock_threshold' => $item->low_stock_threshold ?? 10,
+            'sort_order' => $item->sort_order ?? 999,
+            'image' => $item->image,
+            'pricing_type' => $item->pricing_type ?? 'single',
+            'price_solo' => $item->price_solo ? (float) $item->price_solo : null,
+            'price_whole' => $item->price_whole ? (float) $item->price_whole : null,
+            'has_recipe' => (bool) $item->has_recipe,
+            'inventory_status' => $inventory['status'],
+            'inventory_status_label' => $inventory['label'],
+            'inventory_available_servings' => $inventory['available_servings'],
+            'ingredients' => $item->ingredients->map(function ($ing) use ($poolCode) {
+                return [
+                    'id' => $ing->id,
+                    'name' => $ing->name,
+                    'quantity_required' => (float) $ing->pivot->quantity_required,
+                    'unit' => $ing->pivot->unit ?? $ing->unit,
+                    'notes' => $ing->pivot->notes,
+                    'cost_per_unit' => (float) $ing->cost_per_unit,
+                    'quantity' => $this->availableIngredientQuantityForPool($ing, $poolCode),
+                ];
+            }),
+        ];
+    }
+
+    private function resolveItemPoolCode(Item $item): string
+    {
+        if (!empty($item->inventory_pool_code)) {
+            return (string) $item->inventory_pool_code;
+        }
+
+        return (bool) optional($item->category)->is_kitchen_category
+            ? InventoryPool::KITCHEN
+            : InventoryPool::RESTO;
+    }
+
+    private function availableIngredientQuantityForPool($ingredient, string $poolCode): float
+    {
+        return (float) optional(
+            $ingredient->stocks->first(fn ($stock) => optional($stock->pool)->code === $poolCode)
+        )->quantity;
+    }
+
+    private function buildInventorySnapshot(Item $item, string $poolCode): array
+    {
+        if ($item->ingredients->isEmpty()) {
+            return [
+                'status' => 'no_recipe',
+                'label' => 'No Recipe',
+                'available_servings' => null,
+            ];
+        }
+
+        $availableServings = null;
+
+        foreach ($item->ingredients as $ingredient) {
+            $required = (float) ($ingredient->pivot->quantity_required ?? 0);
+            if ($required <= 0) {
+                continue;
+            }
+
+            $available = $this->availableIngredientQuantityForPool($ingredient, $poolCode);
+            $requiredUnit = (string) ($ingredient->pivot->unit ?? $ingredient->unit ?? '');
+            $stockUnit = (string) ($ingredient->unit ?? '');
+            $requiredInStockUnit = $this->convertQuantity($required, $requiredUnit, $stockUnit);
+            $effectiveRequired = $requiredInStockUnit ?? $required;
+            if ($effectiveRequired <= 0) {
+                continue;
+            }
+
+            $servings = max(0, (int) floor($available / $effectiveRequired));
+            $availableServings = $availableServings === null
+                ? $servings
+                : min($availableServings, $servings);
+        }
+
+        if ($availableServings === null) {
+            return [
+                'status' => 'no_recipe',
+                'label' => 'No Recipe',
+                'available_servings' => null,
+            ];
+        }
+
+        if ($availableServings <= 0) {
+            return [
+                'status' => 'out',
+                'label' => 'Out of Stock',
+                'available_servings' => 0,
+            ];
+        }
+
+        if ($availableServings <= self::LOW_STOCK_SERVING_THRESHOLD) {
+            return [
+                'status' => 'low',
+                'label' => 'Low Stock',
+                'available_servings' => $availableServings,
+            ];
+        }
+
+        return [
+            'status' => 'in',
+            'label' => 'In Stock',
+            'available_servings' => $availableServings,
+        ];
+    }
+
+    private function convertQuantity(float $quantity, ?string $fromUnit, ?string $toUnit): ?float
+    {
+        $from = $this->normalizeUnit($fromUnit);
+        $to = $this->normalizeUnit($toUnit);
+
+        if ($from === '' || $to === '' || $from === $to) {
+            return $quantity;
+        }
+
+        if ($from === 'g' && $to === 'kg') {
+            return $quantity / 1000;
+        }
+
+        if ($from === 'kg' && $to === 'g') {
+            return $quantity * 1000;
+        }
+
+        if ($from === 'ml' && $to === 'l') {
+            return $quantity / 1000;
+        }
+
+        if ($from === 'l' && $to === 'ml') {
+            return $quantity * 1000;
+        }
+
+        return null;
+    }
+
+    private function normalizeUnit(?string $unit): string
+    {
+        $normalized = strtolower(trim((string) $unit));
+
+        return match ($normalized) {
+            'gram', 'grams', 'gm', 'gms' => 'g',
+            'kilogram', 'kilograms', 'kgs' => 'kg',
+            'liter', 'litre', 'liters', 'litres', 'ltr', 'ltrs' => 'l',
+            'milliliter', 'millilitre', 'milliliters', 'millilitres', 'mls' => 'ml',
+            'pack', 'packs', 'boxes' => 'box',
+            'pcs', 'pc', 'piece', 'pieces' => 'piece',
+            default => $normalized,
+        };
+    }
+
     /**
      * Get dashboard statistics
      */
@@ -340,6 +505,8 @@ class FoodCategoryController extends Controller
     {
         return [
             'total_categories' => Category::count(),
+            'total_main_categories' => Category::whereNull('parent_id')->count(),
+            'total_subcategories' => Category::whereNotNull('parent_id')->count(),
             'total_items' => Item::count(),
             'active_categories' => Category::where('is_active', true)->count(),
             'available_items' => Item::where('is_available', true)->count(),

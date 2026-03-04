@@ -4,12 +4,11 @@ use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\FoodCategoryController;
 use App\Http\Controllers\Admin\FoodItemController;
 use App\Http\Controllers\Admin\InventoryController;
-use App\Http\Controllers\Admin\InventoryReportController;
+use App\Http\Controllers\Admin\RoleController;
 use App\Http\Controllers\Admin\PurchaseOrderController;
-use App\Http\Controllers\Admin\ReportsController;
 use App\Http\Controllers\Admin\PosController;
 use App\Http\Controllers\Admin\KitchenController;
-use App\Http\Controllers\Admin\SupplierController;
+use App\Http\Controllers\Cashier\DashboardController as CashierDashboardController;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
@@ -20,8 +19,9 @@ Route::get('/', function () {
         $user = Auth::user();
         $roleRedirects = [
             'admin' => '/admin/dashboard',
-            'resto_admin' => '/cashier/pos',
-            'resto' => '/cashier/pos',
+            'resto_admin' => '/admin/dashboard',
+            'resto' => '/cashier/dashboard',
+            'cashier' => '/cashier/dashboard',
             'kitchen' => '/admin/kitchen',
             'customer' => '/menu',
         ];
@@ -36,8 +36,19 @@ Route::get('/', function () {
 // Auth routes (handled by Breeze)
 require __DIR__.'/auth.php';
 
+// Kitchen shortcuts for account-specific redirects
+Route::middleware(['auth', 'verified', 'role:kitchen,admin'])->prefix('kitchen')->group(function () {
+    Route::get('/', function () {
+        return redirect()->route('admin.kitchen.index');
+    })->name('kitchen.index');
+
+    Route::get('/dashboard', function () {
+        return redirect()->route('admin.kitchen.index');
+    })->name('kitchen.dashboard');
+});
+
 // Admin routes
-Route::middleware(['auth', 'verified', 'role:admin'])->prefix('admin')->name('admin.')->group(function () {
+Route::middleware(['auth', 'verified', 'role:admin,resto_admin'])->prefix('admin')->name('admin.')->group(function () {
     // ==================== DASHBOARD ROUTES ====================
     Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
     Route::get('/transactions', [DashboardController::class, 'transactions'])->name('transactions');
@@ -50,6 +61,7 @@ Route::middleware(['auth', 'verified', 'role:admin'])->prefix('admin')->name('ad
     Route::post('/orders/{order}/ready', [PosController::class, 'markAsReady'])->name('orders.ready');
     Route::post('/orders/{order}/preparing', [PosController::class, 'markAsPreparing'])->name('orders.preparing');
     Route::post('/orders/{order}/complete', [PosController::class, 'complete'])->name('orders.complete');
+    Route::post('/orders/{order}/cancel', [PosController::class, 'cancel'])->name('orders.cancel');
     
     // POS Real-time routes
     Route::get('/pos/menu-updates', [PosController::class, 'getMenuUpdates'])->name('pos.menu-updates');
@@ -78,6 +90,7 @@ Route::middleware(['auth', 'verified', 'role:admin'])->prefix('admin')->name('ad
     Route::post('/food-items/{item}/toggle-featured', [FoodItemController::class, 'toggleFeatured'])->name('food-items.toggle-featured');
     Route::post('/food-items/update-order', [FoodItemController::class, 'updateOrder'])->name('food-items.update-order');
     Route::put('/food-items/{item}/update-stock', [FoodItemController::class, 'updateStock'])->name('food-items.update-stock');
+    Route::delete('/food-items/clear-all', [FoodItemController::class, 'clearAll'])->name('food-items.clear-all');
 
     // ==================== ITEM SIZES ROUTES ====================
     Route::get('/items/{item}/sizes', function($itemId) {
@@ -100,10 +113,16 @@ Route::middleware(['auth', 'verified', 'role:admin'])->prefix('admin')->name('ad
     })->name('items.sizes');
 
     // Other admin routes
-    Route::get('/reports', [ReportsController::class, 'index'])->name('reports.index');
-    Route::get('/roles', function () {
-        return Inertia::render('Admin/Roles/Index');
-    })->name('roles.index');
+    Route::get('/roles', [RoleController::class, 'index'])->name('roles.index');
+    Route::post('/roles/users', [RoleController::class, 'store'])->name('roles.users.store');
+    Route::post('/roles/users/{user}/toggle-active', [RoleController::class, 'toggleActive'])->name('roles.users.toggle-active');
+    Route::get('/settings', function () {
+        return Inertia::render('Admin/Settings/Index');
+    })->name('settings.index');
+});
+
+// Inventory routes for admin, manager, cashier, and kitchen accounts
+Route::middleware(['auth', 'verified', 'role:admin,resto_admin,resto,cashier,kitchen'])->prefix('admin')->name('admin.')->group(function () {
     Route::prefix('inventory')->name('inventory.')->group(function () {
         Route::get('/', [InventoryController::class, 'index'])->name('index');
         
@@ -123,11 +142,6 @@ Route::middleware(['auth', 'verified', 'role:admin'])->prefix('admin')->name('ad
         // Stock Management
         Route::post('/update-stock', [InventoryController::class, 'updateStock'])->name('update-stock');
         
-        // Reports
-        Route::get('/reports/usage', [InventoryReportController::class, 'usageReport'])->name('reports.usage');
-        Route::get('/reports/waste', [InventoryReportController::class, 'wasteReport'])->name('reports.waste');
-        Route::get('/reports/valuation', [InventoryReportController::class, 'valuation'])->name('reports.valuation');
-        Route::get('/reports/forecasting', [InventoryReportController::class, 'forecasting'])->name('reports.forecasting');
         
         // Purchase Orders
         Route::get('/purchase-orders', [PurchaseOrderController::class, 'index'])->name('purchase-orders');
@@ -137,11 +151,6 @@ Route::middleware(['auth', 'verified', 'role:admin'])->prefix('admin')->name('ad
         Route::post('/purchase-orders/{purchaseOrder}/receive', [PurchaseOrderController::class, 'receive'])->name('purchase-orders.receive');
         Route::delete('/purchase-orders/{purchaseOrder}', [PurchaseOrderController::class, 'destroy'])->name('purchase-orders.destroy');
         
-        // Suppliers
-        Route::get('/suppliers', [SupplierController::class, 'index'])->name('suppliers');
-        Route::post('/suppliers', [SupplierController::class, 'store'])->name('suppliers.store');
-        Route::put('/suppliers/{supplier}', [SupplierController::class, 'update'])->name('suppliers.update');
-        Route::delete('/suppliers/{supplier}', [SupplierController::class, 'destroy'])->name('suppliers.destroy');
         
         // Alerts
         Route::get('/low-stock-alerts', [InventoryController::class, 'getLowStockAlerts'])->name('low-stock-alerts');
@@ -149,16 +158,15 @@ Route::middleware(['auth', 'verified', 'role:admin'])->prefix('admin')->name('ad
         // Migration
         Route::post('/migrate-items', [InventoryController::class, 'migrateItems'])->name('migrate-items');
     });
-    Route::get('/settings', function () {
-        return Inertia::render('Admin/Settings/Index');
-    })->name('settings.index');
 });
 
 // Cashier routes
-Route::middleware(['auth', 'verified', 'role:resto,admin'])->prefix('cashier')->group(function () {
+Route::middleware(['auth', 'verified', 'role:resto,cashier,resto_admin,admin'])->prefix('cashier')->group(function () {
     Route::get('/', function () {
-        return redirect('/cashier/pos');
-    })->name('cashier.dashboard');
+        return redirect('/cashier/dashboard');
+    });
+
+    Route::get('/dashboard', [CashierDashboardController::class, 'index'])->name('cashier.dashboard');
     
     Route::get('/pos', [PosController::class, 'index'])->name('cashier.pos');
     Route::post('/pos/orders', [PosController::class, 'store'])->name('cashier.pos.orders.store');
@@ -166,6 +174,7 @@ Route::middleware(['auth', 'verified', 'role:resto,admin'])->prefix('cashier')->
     Route::post('/orders/{order}/ready', [PosController::class, 'markAsReady'])->name('cashier.orders.ready');
     Route::post('/orders/{order}/preparing', [PosController::class, 'markAsPreparing'])->name('cashier.orders.preparing');
     Route::post('/orders/{order}/complete', [PosController::class, 'complete'])->name('cashier.orders.complete');
+    Route::post('/orders/{order}/cancel', [PosController::class, 'cancel'])->name('cashier.orders.cancel');
     
     Route::get('/pos/menu-updates', [PosController::class, 'getMenuUpdates'])->name('cashier.pos.menu-updates');
     Route::get('/pos/order-updates', [PosController::class, 'getOrderUpdates'])->name('cashier.pos.order-updates');
@@ -189,7 +198,7 @@ Route::middleware(['auth', 'verified', 'role:kitchen,admin'])->prefix('admin')->
         Route::put('/order/{sale}/status', [KitchenController::class, 'updateStatus'])->name('update-status');
         Route::put('/item/{saleItem}/status', [KitchenController::class, 'updateItemStatus'])->name('update-item-status');
         
-        // Kitchen actions
+// Kitchen actions
         Route::post('/orders/{order}/start', [KitchenController::class, 'startPreparing'])->name('start');
         Route::post('/orders/{order}/ready', [KitchenController::class, 'markReady'])->name('ready');
         Route::post('/orders/{order}/complete', [KitchenController::class, 'markComplete'])->name('complete');

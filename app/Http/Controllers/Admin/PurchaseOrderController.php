@@ -7,9 +7,12 @@ use App\Models\PurchaseOrder;
 use App\Models\PurchaseOrderItem;
 use App\Models\Supplier;
 use App\Models\Ingredient;
+use App\Models\IngredientStock;
+use App\Models\InventoryTransaction;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class PurchaseOrderController extends Controller
 {
@@ -32,7 +35,9 @@ class PurchaseOrderController extends Controller
             ->paginate(10);
 
         return Inertia::render('Admin/Inventory/PurchaseOrders', [
-            'purchaseOrders' => $purchaseOrders
+            'purchaseOrders' => $purchaseOrders,
+            'activePool' => 'all',
+            'availablePools' => ['all'],
         ]);
     }
 
@@ -146,12 +151,50 @@ class PurchaseOrderController extends Controller
                 'delivery_date' => now()
             ]);
 
+            $purchaseOrder->load('items.ingredient');
+
             // Update ingredient stock quantities
             foreach ($purchaseOrder->items as $item) {
                 $ingredient = Ingredient::find($item->ingredient_id);
-                if ($ingredient) {
-                    $ingredient->increment('stock_quantity', $item->quantity);
+                if (!$ingredient) {
+                    continue;
                 }
+
+                $stock = IngredientStock::where('ingredient_id', $item->ingredient_id)
+                    ->where('inventory_pool_id', 1)
+                    ->lockForUpdate()
+                    ->first();
+
+                if (!$stock) {
+                    $stock = IngredientStock::create([
+                        'ingredient_id' => $item->ingredient_id,
+                        'inventory_pool_id' => 1,
+                        'quantity' => 0,
+                        'min_stock' => 0,
+                        'cost_per_unit' => (float) $item->unit_cost,
+                    ]);
+                }
+
+                $stock->quantity = (float) $stock->quantity + (float) $item->quantity;
+                if ((float) $item->unit_cost > 0) {
+                    $stock->cost_per_unit = (float) $item->unit_cost;
+                }
+                $stock->save();
+
+                InventoryTransaction::create([
+                    'ingredient_id' => (int) $item->ingredient_id,
+                    'inventory_pool_id' => 1,
+                    'quantity_delta' => (float) $item->quantity,
+                    'reason' => 'purchase_receive',
+                    'reference_type' => 'purchase_order',
+                    'reference_id' => $item->id,
+                    'user_id' => (int) auth()->id(),
+                    'notes' => 'Stock-in from purchase order receipt',
+                    'meta' => [
+                        'po_number' => $purchaseOrder->po_number,
+                        'unit_cost' => (float) $item->unit_cost,
+                    ],
+                ]);
             }
 
             DB::commit();
@@ -159,6 +202,10 @@ class PurchaseOrderController extends Controller
             return redirect()->back()->with('success', 'Purchase order received and inventory updated.');
         } catch (\Exception $e) {
             DB::rollBack();
+            Log::error('Failed to receive purchase order', [
+                'purchase_order_id' => $purchaseOrder->id ?? null,
+                'error' => $e->getMessage(),
+            ]);
             return redirect()->back()->with('error', 'Failed to receive purchase order: ' . $e->getMessage());
         }
     }
